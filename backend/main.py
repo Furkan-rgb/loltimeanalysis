@@ -68,61 +68,68 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- API ENDPOINTS ---
 
-
-@app.post("/fetch-history/")
-async def start_fetch_job(
-    game_name: str, tag_line: str, region: str = "europe", force_update: bool = False
-):
+@app.get("/history/{game_name}/{tag_line}")
+def get_history(game_name: str, tag_line: str):
     """
-    Initiates a background job to fetch match history.
-    This endpoint is non-blocking and returns a status immediately.
+    Retrieves a player's match history directly from the cache.
+    This is a simple, non-blocking read operation.
     """
     player_id = f"{game_name.lower()}#{tag_line.lower()}"
     cache_key = f"cache:{player_id}"
+
+    if cached_data := redis_service.get_from_cache(cache_key):
+        print(f"CACHE HIT for {player_id}")
+        return {"status": "cached", "data": cached_data}
+
+    # If no data is found in the cache, return a 404
+    raise HTTPException(
+        status_code=404,
+        detail="No match history found for this player. Please trigger an update.",
+    )
+
+
+@app.post("/update/{game_name}/{tag_line}")
+async def trigger_update_job(game_name: str, tag_line: str, region: str = "europe"):
+    """
+    Triggers a background job to fetch or update a player's match history.
+    This is a non-blocking action endpoint.
+    """
+    player_id = f"{game_name.lower()}#{tag_line.lower()}"
     cooldown_key = f"cooldown:{player_id}"
     lock_key = f"lock:{player_id}"
 
-    # 1. Immediately return cached data if available and not forcing an update
-    if not force_update:
-        if cached_data := redis_service.get_from_cache(cache_key):
-            print(f"CACHE HIT for {player_id}")
-            return {"status": "cached", "data": cached_data}
-
-    # 2. Check for cooldown
+    # 1. Check for cooldown
     if (ttl := redis_service.get_cooldown_ttl(cooldown_key)) > 0:
         raise HTTPException(
-            status_code=429,
+            status_code=429,  # Too Many Requests
             detail=f"This player is on a cooldown. Please try again in {ttl} seconds.",
         )
 
-    # 3. Atomically acquire the lock before starting any work
+    # 2. Atomically acquire the lock
     if not redis_service.acquire_lock(lock_key, config.LOCK_TIMEOUT_SECONDS):
-        print(f"Fetch already in progress for {player_id}")
+        print(f"Update already in progress for {player_id}")
         return {"status": "in_progress"}
 
-    # 4. Enqueue the new DISPATCHER job
+    # 3. Enqueue the dispatcher job
     print(f"Lock acquired. Enqueuing dispatcher job for {player_id}")
     await arq_redis_pool.enqueue_job("dispatch_fetch_job", game_name, tag_line, region)
     return {"status": "started"}
 
 
-@app.get("/fetch-status/")
-def get_fetch_status(game_name: str, tag_line: str):
+@app.get("/status/{game_name}/{tag_line}")
+def get_update_status(game_name: str, tag_line: str):
     """
-    Poll this endpoint to get the status of a running fetch job.
-    This now reads from the 'aggregation' key used by the fan-out system.
+    Polls the status of a running update job.
     """
     player_id = f"{game_name.lower()}#{tag_line.lower()}"
     lock_key = f"lock:{player_id}"
     aggregation_key = f"job:{player_id}:agg"
+    cache_key = f"cache:{player_id}"
 
-    # Check the aggregation key first, as it's the primary source of truth for progress
+    # Check the aggregation key for detailed progress
     status_data = redis_service.redis_client.hgetall(aggregation_key)
-
     if status_data:
-        # We have an active job, format the data for the frontend
         return {
             "status": "progress",
             "message": f"Processing {status_data.get('processed', 0)} of {status_data.get('total', 1)} matches...",
@@ -130,20 +137,21 @@ def get_fetch_status(game_name: str, tag_line: str):
             "total": int(status_data.get("total", 1)),
         }
 
-    # If no aggregation key, check if a lock still exists (e.g., dispatcher is still running)
+    # If no aggregation key, check if a lock still exists (job is starting up)
     if redis_service.redis_client.exists(lock_key):
         return {
             "status": "progress",
-            "message": "Dispatcher is starting up...",
+            "message": "Job is starting up...",
             "processed": 0,
-            "total": 100,
+            "total": 100,  # A default total for the initial phase
         }
 
-    # If no job is active, report the idle state based on cache
-    if redis_service.get_from_cache(f"cache:{player_id}"):
-        return {"status": "idle_data_exists"}
+    # If no job is active, check if the final data exists. This is our "complete" signal.
+    if redis_service.redis_client.exists(cache_key):
+        return {"status": "ready", "message": "Data is ready in cache."}
 
-    return {"status": "idle_no_data"}
+    # If we reach here, there's no active job and no cached data.
+    return {"status": "idle_no_data", "message": "No data found for this player."}
 
 
 # --- LOCAL DEVELOPMENT RUNNER ---

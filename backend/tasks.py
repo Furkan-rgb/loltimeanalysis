@@ -66,6 +66,7 @@ async def dispatch_fetch_job(ctx, game_name: str, tag_line: str, region: str):
                     region,
                     aggregation_key,
                     partial_results_key,
+                    player_id,
                 )
 
             # STEP 2: ONLY AFTER the loop is successful, "commit" the state to Redis.
@@ -95,16 +96,12 @@ async def fetch_match_details_task(
     region: str,
     aggregation_key: str,
     partial_results_key: str,
+    player_id: str,
 ):
     """
     A simple, small task that fetches details for a single match and
     stores the result in a Redis List, respecting the global rate limit.
     """
-    # Extract player_id from aggregation_key for better logging
-    try:
-        player_id = aggregation_key.split(":")[1] + "#" + aggregation_key.split(":")[2]
-    except:
-        player_id = "unknown"
 
     print(f"[{player_id}] FETCHER: Starting for match {match_id}.")
 
@@ -164,28 +161,52 @@ async def aggregate_results_task(
 ):
     """
     This final task gathers all partial results, saves them to the main cache,
-    and cleans up all temporary job keys.
+    and cleans up all temporary job keys atomically.
     """
     print(f"[{player_id}] AGGREGATOR: Started.")
 
-    # 1. Get all partial results from the Redis list
+    # 1. Get all partial results (this is a read operation, so it's separate)
     results_json = redis_service.redis_client.lrange(partial_results_key, 0, -1)
+    if not results_json:
+        print(f"[{player_id}] AGGREGATOR: No partial results found. Cleaning up.")
+        # Even if there's no data, we should clean up the job keys.
+        redis_service.redis_client.delete(aggregation_key, partial_results_key)
+        redis_service.release_lock(f"lock:{player_id}")
+        return
+
     all_games_data = [json.loads(item) for item in results_json]
     print(f"[{player_id}] AGGREGATOR: Aggregating {len(all_games_data)} results.")
 
     # 2. Sort the data by timestamp
     all_games_data.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    # 3. Save to the main cache and set cooldown
+    # 3. Atomically save results and clean up using a pipeline
     cache_key = f"cache:{player_id}"
     cooldown_key = f"cooldown:{player_id}"
-    redis_service.set_in_cache(cache_key, all_games_data)
-    redis_service.set_cooldown(cooldown_key)
+    lock_key = f"lock:{player_id}"
+    data_to_cache = json.dumps(all_games_data, default=str)
 
-    # 4. Clean up all temporary job keys
-    print(f"[{player_id}] AGGREGATOR: Cleaning up temporary job keys.")
-    redis_service.redis_client.delete(aggregation_key)
-    redis_service.redis_client.delete(partial_results_key)
-    redis_service.release_lock(f"lock:{player_id}")
+    try:
+        # Start a transaction
+        pipe = redis_service.redis_client.pipeline()
+
+        # Queue all the commands
+        pipe.setex(cache_key, config.CACHE_EXPIRATION_SECONDS, data_to_cache)
+        pipe.setex(
+            cooldown_key, config.COOLDOWN_SECONDS, 1
+        )  # Assuming COOLDOWN_SECONDS is in config
+        pipe.delete(aggregation_key)
+        pipe.delete(partial_results_key)
+        pipe.delete(lock_key)
+
+        # Execute them all at once
+        pipe.execute()
+
+        print(f"[{player_id}] AGGREGATOR: Atomically saved cache and cleaned up keys.")
+
+    except Exception as e:
+        print(f"[{player_id}] AGGREGATOR: FAILED during atomic transaction: {e}")
+        # Here you might want to add logic to handle a failed transaction,
+        # though it's rare for this block to fail if Redis is running.
 
     print(f"[{player_id}] AGGREGATOR: Finished. Job complete.")

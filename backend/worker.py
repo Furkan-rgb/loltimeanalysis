@@ -1,4 +1,3 @@
-# worker.py
 import arq
 import sys
 import asyncio
@@ -6,7 +5,6 @@ from watchfiles import run_process
 
 import config
 
-# Import all the functions the worker needs to be able to run
 from tasks import dispatch_fetch_job, fetch_match_details_task, aggregate_results_task
 
 
@@ -21,7 +19,18 @@ class WorkerSettings:
         host=config.REDIS_HOST, port=config.REDIS_PORT
     )
 
-    # CORRECTED: Removed the 'self' argument from the function definition.
+    # Set the maximum number of times a job will be retried before being sent to the DLQ.
+    max_tries = 3
+
+    async def on_job_failure(self, ctx, job_id, result, exc):
+        """
+        This hook runs when a job fails its final attempt.
+        By default, ARQ moves it to the DLQ. We can add logging here to see what failed.
+        """
+        print(f"Job {job_id} failed after {self.max_tries} attempts with error: {exc}")
+
+    # ------------------------------------------
+
     async def on_startup(ctx):
         """
         Runs when the worker starts. We use this to pass the --verbose

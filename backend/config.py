@@ -5,7 +5,7 @@ load_dotenv()
 
 # --- RIOT API ---
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
-GAMES_TO_FETCH = 1000
+GAMES_TO_FETCH = 3
 API_REQUEST_DELAY_MS = 1250  # 1.25 seconds
 API_REQUEST_DELAY_SECONDS = API_REQUEST_DELAY_MS / 1000.0
 RATE_LIMIT_LOCK_KEY = "riot_api_rate_limit_lock"

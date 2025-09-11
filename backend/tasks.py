@@ -56,7 +56,22 @@ async def dispatch_fetch_job(ctx, game_name: str, tag_line: str, region: str):
                 f"[{player_id}] DISPATCHER: Found {total_matches} matches. Enqueuing sub-tasks..."
             )
 
-            # STEP 1: Enqueue all the jobs FIRST.
+            # STEP 1: Write the initial state to Redis FIRST.
+            print(f"[{player_id}] DISPATCHER: Creating aggregation state.")
+            redis_service.redis_client.hset(
+                aggregation_key,
+                mapping={
+                    "total": total_matches,
+                    "processed": 0,
+                    "player_id": player_id,
+                },
+            )
+            redis_service.redis_client.expire(aggregation_key, 3600)
+
+            # STEP 2: Now, enqueue all the fetcher tasks.
+            print(
+                f"[{player_id}] DISPATCHER: Enqueuing {total_matches} fetcher tasks..."
+            )
             arq_pool = ctx["redis"]
             for match_id in all_match_ids:
                 await arq_pool.enqueue_job(
@@ -68,20 +83,6 @@ async def dispatch_fetch_job(ctx, game_name: str, tag_line: str, region: str):
                     partial_results_key,
                     player_id,
                 )
-
-            # STEP 2: ONLY AFTER the loop is successful, "commit" the state to Redis.
-            print(
-                f"[{player_id}] DISPATCHER: All {total_matches} sub-tasks enqueued. Creating aggregation state."
-            )
-            redis_service.redis_client.hset(
-                aggregation_key,
-                mapping={
-                    "total": total_matches,
-                    "processed": 0,
-                    "player_id": player_id,
-                },
-            )
-            redis_service.redis_client.expire(aggregation_key, 3600)
 
     except Exception as e:
         print(f"[{player_id}] DISPATCHER: FAILED with error: {e}")
@@ -99,60 +100,64 @@ async def fetch_match_details_task(
     player_id: str,
 ):
     """
-    A simple, small task that fetches details for a single match and
-    stores the result in a Redis List, respecting the global rate limit.
+    Fetches details for a single match, guaranteeing progress is always reported.
     """
-
     print(f"[{player_id}] FETCHER: Starting for match {match_id}.")
 
-    # --- RATE LIMITING LOGIC ---
-    while True:
-        # Try to acquire the lock. SET if Not eXists, with an EXpiration of 1.25s.
-        # This is an atomic operation.
-        lock_acquired = redis_service.redis_client.set(
-            config.RATE_LIMIT_LOCK_KEY, 1, px=config.API_REQUEST_DELAY_MS, nx=True
-        )
-        if lock_acquired:
-            # We got the lock, break the loop and proceed.
-            break
-        # Lock is held by another worker, wait a short time and try again.
-        await asyncio.sleep(0.1)
-
-    # --- ORIGINAL TASK LOGIC ---
-    async with httpx.AsyncClient() as client:
-        details = await riot_api_client.get_match_details_async(
-            client, match_id, puuid, region
-        )
-        if details:
-            # Store partial result as a JSON string in a list
-            redis_service.redis_client.rpush(
-                partial_results_key, json.dumps(details, default=str)
+    try:
+        # --- RATE LIMITING LOGIC ---
+        while True:
+            lock_acquired = redis_service.redis_client.set(
+                config.RATE_LIMIT_LOCK_KEY, 1, px=config.API_REQUEST_DELAY_MS, nx=True
             )
-            print(f"[{player_id}] FETCHER: -> Stored details for match {match_id}.")
-        else:
-            print(
-                f"[{player_id}] FETCHER: -> FAILED to get details for match {match_id}."
+            if lock_acquired:
+                break
+            await asyncio.sleep(0.1)
+
+        # --- HTTP REQUEST LOGIC ---
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # We assume get_match_details_async is updated to catch its own errors
+            # and return None on failure, as discussed previously.
+            details = await riot_api_client.get_match_details_async(
+                client, match_id, puuid, region
             )
+            if details:
+                timestamp = details.get("timestamp", 0)
+                redis_service.redis_client.zadd(
+                    partial_results_key, {json.dumps(details, default=str): timestamp}
+                )
+                print(f"[{player_id}] FETCHER: -> Stored details for match {match_id}.")
 
-    # Fan-in: Atomically increment the processed counter
-    processed_count = redis_service.redis_client.hincrby(
-        aggregation_key, "processed", 1
-    )
+    except Exception as e:
+        # This broad exception catch ensures that ANY failure within the task
+        # is logged, but doesn't crash the task before the 'finally' block.
+        print(f"[{player_id}] FETCHER: -> FAILED for match {match_id} with error: {e}")
 
-    # Check if this is the last task
-    total_count = int(redis_service.redis_client.hget(aggregation_key, "total") or 0)
-
-    print(f"[{player_id}] FETCHER: Progress is now {processed_count}/{total_count}.")
-
-    if total_count > 0 and processed_count >= total_count:
-        # This is the last worker, trigger the final aggregation task
+    finally:
+        # --- GUARANTEED PROGRESS & TRIGGER LOGIC ---
+        # This block runs whether the 'try' block succeeded or failed.
+        processed_count = redis_service.redis_client.hincrby(
+            aggregation_key, "processed", 1
+        )
+        total_count = int(
+            redis_service.redis_client.hget(aggregation_key, "total") or 0
+        )
         print(
-            f"[{player_id}] FETCHER: Final sub-task complete. Triggering aggregation."
+            f"[{player_id}] FETCHER: Progress is now {processed_count}/{total_count}."
         )
-        arq_pool = ctx["redis"]
-        await arq_pool.enqueue_job(
-            "aggregate_results_task", aggregation_key, partial_results_key, player_id
-        )
+
+        # The trigger logic now reliably runs on every task completion.
+        if total_count > 0 and processed_count >= total_count:
+            print(
+                f"[{player_id}] FETCHER: Final task complete. Triggering aggregation."
+            )
+            arq_pool = ctx["redis"]
+            await arq_pool.enqueue_job(
+                "aggregate_results_task",
+                aggregation_key,
+                partial_results_key,
+                player_id,
+            )
 
 
 # --- TASK 3: The Aggregator ---
@@ -160,53 +165,47 @@ async def aggregate_results_task(
     ctx, aggregation_key: str, partial_results_key: str, player_id: str
 ):
     """
-    This final task gathers all partial results, saves them to the main cache,
+    This final task renames the completed results set to the final cache key
     and cleans up all temporary job keys atomically.
     """
     print(f"[{player_id}] AGGREGATOR: Started.")
 
-    # 1. Get all partial results (this is a read operation, so it's separate)
-    results_json = redis_service.redis_client.lrange(partial_results_key, 0, -1)
-    if not results_json:
-        print(f"[{player_id}] AGGREGATOR: No partial results found. Cleaning up.")
-        # Even if there's no data, we should clean up the job keys.
-        redis_service.redis_client.delete(aggregation_key, partial_results_key)
-        redis_service.release_lock(f"lock:{player_id}")
-        return
-
-    all_games_data = [json.loads(item) for item in results_json]
-    print(f"[{player_id}] AGGREGATOR: Aggregating {len(all_games_data)} results.")
-
-    # 2. Sort the data by timestamp
-    all_games_data.sort(key=lambda x: x["timestamp"], reverse=True)
-
-    # 3. Atomically save results and clean up using a pipeline
     cache_key = f"cache:{player_id}"
     cooldown_key = f"cooldown:{player_id}"
     lock_key = f"lock:{player_id}"
-    data_to_cache = json.dumps(all_games_data, default=str)
 
     try:
-        # Start a transaction
+        # Start a transaction to make the final steps atomic.
         pipe = redis_service.redis_client.pipeline()
 
-        # Queue all the commands
-        pipe.setex(cache_key, config.CACHE_EXPIRATION_SECONDS, data_to_cache)
-        pipe.setex(
-            cooldown_key, config.COOLDOWN_SECONDS, 1
-        )  # Assuming COOLDOWN_SECONDS is in config
+        # 1. Rename the sorted set of results to its final cache key.
+        # This is an atomic, instantaneous operation in Redis.
+        pipe.rename(partial_results_key, cache_key)
+
+        # 2. Set the expiration on the final cache key.
+        pipe.expire(cache_key, config.CACHE_EXPIRATION_SECONDS)
+
+        # 3. Set the cooldown key for the user.
+        pipe.setex(cooldown_key, config.COOLDOWN_SECONDS, 1)
+
+        # 4. Delete the temporary aggregation counter and the job lock.
         pipe.delete(aggregation_key)
-        pipe.delete(partial_results_key)
         pipe.delete(lock_key)
 
-        # Execute them all at once
+        # Execute all commands in the pipeline at once.
         pipe.execute()
 
-        print(f"[{player_id}] AGGREGATOR: Atomically saved cache and cleaned up keys.")
+        print(
+            f"[{player_id}] AGGREGATOR: Atomically cached results and cleaned up keys."
+        )
 
     except Exception as e:
         print(f"[{player_id}] AGGREGATOR: FAILED during atomic transaction: {e}")
-        # Here you might want to add logic to handle a failed transaction,
-        # though it's rare for this block to fail if Redis is running.
+        # If the rename fails (e.g., partial_results_key doesn't exist),
+        # we should still clean up.
+        redis_service.redis_client.delete(
+            aggregation_key, lock_key, partial_results_key
+        )
+        redis_service.release_lock(lock_key)  # Defensive release
 
     print(f"[{player_id}] AGGREGATOR: Finished. Job complete.")

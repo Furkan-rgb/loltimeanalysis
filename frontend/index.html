@@ -88,6 +88,8 @@
         transition: background-color 0.2s;
         min-width: 120px; /* Give button a consistent width */
         text-align: center;
+        position: relative;
+        overflow: hidden;
       }
       #fetchButton:disabled {
         background-color: #a9a9a9;
@@ -96,33 +98,33 @@
       #fetchButton:hover:not(:disabled) {
         background-color: #0056b3;
       }
-      #progress-container {
-        width: 100%;
-        background-color: #e9ecef;
-        border-radius: 6px;
-        overflow: hidden;
-        margin-bottom: 1em;
-        position: relative;
-        height: 24px;
+
+      /* Progress button styles */
+      #fetchButton.progress-mode {
+        background-color: #6c757d; /* Base gray background */
+        color: white;
       }
-      #progress-bar {
-        width: 0%;
-        height: 24px;
-        background-color: #28a745;
-        transition: width 0.4s ease;
+
+      #fetchButton.progress-mode::before {
+        content: "";
         position: absolute;
         top: 0;
         left: 0;
-      }
-      #progress-text {
-        position: absolute;
-        top: 0;
-        left: 10px;
-        height: 24px;
-        line-height: 24px;
-        color: #000;
-        font-weight: 500;
+        height: 100%;
+        width: var(--progress, 0%);
+        background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+        transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
         z-index: 1;
+      }
+
+      #fetchButton.progress-mode span {
+        position: relative;
+        z-index: 2;
+      }
+
+      #fetchButton.progress-mode:disabled {
+        background-color: #6c757d;
+        cursor: not-allowed;
       }
       #logs {
         background-color: #f8f9fa;
@@ -195,12 +197,6 @@
       <h3>Logs:</h3>
       <div id="logs"></div>
 
-      <h3 id="progress-title" style="display: none">Progress:</h3>
-      <div id="progress-container" style="display: none">
-        <div id="progress-bar"></div>
-        <div id="progress-text">0 / 100 (0%)</div>
-      </div>
-
       <h3>Match History:</h3>
       <div id="results-container">Data will appear here once fetched.</div>
     </div>
@@ -211,8 +207,6 @@
       const gameNameInput = document.getElementById("gameName");
       const tagLineInput = document.getElementById("tagLine");
       const logsDiv = document.getElementById("logs");
-      const progressBar = document.getElementById("progress-bar");
-      const progressText = document.getElementById("progress-text");
       const resultsContainer = document.getElementById("results-container");
       const errorMessageP = document.getElementById("error-message");
 
@@ -220,10 +214,10 @@
       const appState = {
         isDataLoaded: false,
         cooldownInterval: null,
-        pollingInterval: null,
+        eventSource: null, // Replaces pollingInterval for SSE
       };
 
-      // --- UI HELPER FUNCTIONS (largely unchanged) ---
+      // --- UI HELPER FUNCTIONS ---
       function validateInputs() {
         const gameName = gameNameInput.value.trim();
         const tagLine = tagLineInput.value.trim();
@@ -241,10 +235,10 @@
         return hasInputs;
       }
 
-      function stopPolling() {
-        if (appState.pollingInterval) {
-          clearInterval(appState.pollingInterval);
-          appState.pollingInterval = null;
+      function closeEventStream() {
+        if (appState.eventSource) {
+          appState.eventSource.close();
+          appState.eventSource = null;
         }
       }
 
@@ -257,33 +251,32 @@
 
       function setButtonState(state, duration = 0) {
         stopCooldown();
-        const progressTitle = document.getElementById("progress-title");
-        const progressContainer = document.getElementById("progress-container");
         fetchButton.disabled = false;
-
-        const showProgress = state === "POLLING" || state === "UPDATING";
-        progressTitle.style.display = showProgress ? "block" : "none";
-        progressContainer.style.display = showProgress ? "block" : "none";
+        fetchButton.classList.remove("progress-mode");
 
         switch (state) {
           case "IDLE_NO_DATA":
-            fetchButton.textContent = "Fetch History";
+            fetchButton.innerHTML = "Fetch History";
             break;
           case "IDLE_WITH_DATA":
-            fetchButton.textContent = "Update";
+            fetchButton.innerHTML = "Update";
             break;
-          case "POLLING":
-            fetchButton.textContent = "Fetching...";
+          case "POLLING": // Name kept for consistency, now means "streaming"
+            fetchButton.innerHTML = "<span>Fetching...</span>";
             fetchButton.disabled = true;
+            fetchButton.classList.add("progress-mode");
+            fetchButton.style.setProperty("--progress", "0%");
             break;
           case "UPDATING":
-            fetchButton.textContent = "Updating...";
+            fetchButton.innerHTML = "<span>Updating...</span>";
             fetchButton.disabled = true;
+            fetchButton.classList.add("progress-mode");
+            fetchButton.style.setProperty("--progress", "0%");
             break;
           case "COOLDOWN":
             let timer = duration;
             fetchButton.disabled = true;
-            fetchButton.textContent = `Cooldown (${timer}s)`;
+            fetchButton.innerHTML = `Cooldown (${timer}s)`;
             appState.cooldownInterval = setInterval(() => {
               timer--;
               if (timer <= 0) {
@@ -292,7 +285,7 @@
                   appState.isDataLoaded ? "IDLE_WITH_DATA" : "IDLE_NO_DATA"
                 );
               } else {
-                fetchButton.textContent = `Cooldown (${timer}s)`;
+                fetchButton.innerHTML = `Cooldown (${timer}s)`;
               }
             }, 1000);
             break;
@@ -303,8 +296,12 @@
       function updateProgress(processed = 0, total = 100) {
         const percentage =
           total > 0 ? Math.round((processed / total) * 100) : 0;
-        progressBar.style.width = percentage + "%";
-        progressText.textContent = `${percentage}%`;
+
+        // Update button progress
+        if (fetchButton.classList.contains("progress-mode")) {
+          fetchButton.style.setProperty("--progress", `${percentage}%`);
+          // Button text remains static - no percentage updates
+        }
       }
 
       function renderResultsAsTable(data) {
@@ -313,22 +310,32 @@
             "<p>No recent ranked match data found.</p>";
           return;
         }
-        let tableHTML = `<table><thead><tr><th>Date</th><th>Time</th><th>Champion</th><th>Outcome</th><th>Role</th></tr></thead><tbody>`;
+        let tableHTML = `<table><thead><tr><th>Date</th><th>Time</th><th>Champion</th><th>Outcome</th><th>Role</th><th>Match ID</th></tr></thead><tbody>`;
         for (const game of data) {
+          // Convert timestamp to readable date and time
+          const date = new Date(game.timestamp);
+          const dateStr = date.toLocaleDateString();
+          const timeStr = date.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+
           const outcomeStyle =
             game.outcome === "Win" ? "color: #28a745;" : "color: #dc3545;";
-          tableHTML += `<tr><td>${game.date}</td><td>${
-            game.time_start || "N/A"
-          }</td><td>${game.champion}</td><td style="${outcomeStyle}">${
-            game.outcome
-          }</td><td>${game.role || "N/A"}</td></tr>`;
+          tableHTML += `<tr><td>${dateStr}</td><td>${timeStr}</td><td>${
+            game.champion
+          }</td><td style="${outcomeStyle}">${game.outcome}</td><td>${
+            game.role || "N/A"
+          }</td><td style="font-family: monospace; font-size: 0.8em;">${
+            game.match_id
+          }</td></tr>`;
         }
         tableHTML += "</tbody></table>";
         resultsContainer.innerHTML = tableHTML;
       }
 
       function resetUIForNewPlayer() {
-        stopPolling();
+        closeEventStream();
         stopCooldown();
         appState.isDataLoaded = false;
         resultsContainer.innerHTML = "Data will appear here once fetched.";
@@ -338,99 +345,40 @@
         setButtonState("IDLE_NO_DATA");
       }
 
-      // --- REFACTORED API LOGIC ---
+      // --- REFACTORED API LOGIC FOR SSE ---
 
       async function fetchAndRenderHistory() {
         if (!validateInputs()) return false;
         const gameName = gameNameInput.value.trim();
         const tagLine = tagLineInput.value.trim();
-
-        // First, try to fetch and display cached data
-        const historyUrl = `http://localhost:8000/history/${encodeURIComponent(
+        const url = `http://localhost:8000/history/${encodeURIComponent(
           gameName
         )}/${encodeURIComponent(tagLine)}`;
 
-        let hasCachedData = false;
-
         try {
-          const response = await fetch(historyUrl);
-          if (response.ok) {
-            const result = await response.json();
+          const response = await fetch(url);
+          if (response.status === 404) {
             logsDiv.innerHTML =
-              "<div>Successfully fetched data from cache!</div>";
-            renderResultsAsTable(result.data);
-            appState.isDataLoaded = true;
-            hasCachedData = true;
+              "<div>No cached data found. Ready to fetch.</div>";
+            setButtonState("IDLE_NO_DATA");
+            return false;
           }
-        } catch (error) {
-          console.error("Error fetching cached data:", error);
-        }
+          if (!response.ok)
+            throw new Error(`HTTP error! Status: ${response.status}`);
 
-        // ALWAYS check for ongoing updates, regardless of cached data
-        const ongoingUpdate = await checkForOngoingUpdate(gameName, tagLine);
-        if (ongoingUpdate.hasUpdate) {
-          // If we have cached data and it's a progress update, update the log to show both
-          if (hasCachedData && ongoingUpdate.type === "progress") {
-            logsDiv.innerHTML =
-              "<div>Cached data displayed. Found ongoing update! Connecting to progress...</div>";
-          }
-          // For cooldown or complete, the checkForOngoingUpdate already set the appropriate message
-          return true; // We're now tracking an ongoing update or in cooldown
-        }
-
-        // If no ongoing update, set appropriate button state
-        if (hasCachedData) {
+          const result = await response.json();
+          logsDiv.innerHTML =
+            "<div>Successfully displayed data from cache.</div>";
+          renderResultsAsTable(result.data);
+          appState.isDataLoaded = true;
           setButtonState("IDLE_WITH_DATA");
           return true;
-        } else {
-          logsDiv.innerHTML =
-            "<div>No cached data found for this player.</div>";
+        } catch (error) {
+          errorMessageP.textContent =
+            "Failed to fetch history. Server may be down.";
+          console.error("Fetch history error:", error);
           setButtonState("IDLE_NO_DATA");
           return false;
-        }
-      }
-
-      async function checkForOngoingUpdate(gameName, tagLine) {
-        const statusUrl = `http://localhost:8000/status/${encodeURIComponent(
-          gameName
-        )}/${encodeURIComponent(tagLine)}`;
-
-        try {
-          const response = await fetch(statusUrl);
-          if (!response.ok) return { hasUpdate: false };
-
-          const statusData = await response.json();
-
-          if (statusData.status === "progress") {
-            // There's an ongoing update! Hook into it
-            logsDiv.innerHTML =
-              "<div>Found ongoing update! Connecting to progress...</div>";
-            setButtonState("POLLING");
-            updateProgress(statusData.processed || 0, statusData.total || 100);
-
-            // Start polling for this ongoing update
-            stopPolling();
-            appState.pollingInterval = setInterval(pollForStatus, 2000);
-            return { hasUpdate: true, type: "progress" };
-          } else if (statusData.status === "complete") {
-            // Update just finished, fetch the new data
-            logsDiv.innerHTML =
-              "<div>Update recently completed! Fetching data...</div>";
-            setTimeout(() => fetchAndRenderHistory(), 500);
-            return { hasUpdate: true, type: "complete" };
-          } else if (statusData.status === "cooldown") {
-            // Player is in cooldown
-            const cooldownTime = statusData.cooldown_remaining || 0;
-            logsDiv.innerHTML = `<div>Player is in cooldown. Remaining time: ${cooldownTime}s</div>`;
-            setButtonState("COOLDOWN", Math.ceil(cooldownTime));
-            return { hasUpdate: true, type: "cooldown" };
-          }
-
-          // No ongoing update (idle_no_data or other status)
-          return { hasUpdate: false };
-        } catch (error) {
-          console.error("Error checking for ongoing update:", error);
-          return { hasUpdate: false };
         }
       }
 
@@ -442,32 +390,21 @@
           gameName
         )}/${encodeURIComponent(tagLine)}`;
 
-        const state = appState.isDataLoaded ? "UPDATING" : "POLLING";
-        setButtonState(state);
-        updateProgress(0, 100); // Reset progress
-        logsDiv.innerHTML = "<div>Requesting update from server...</div>";
-
         try {
           const response = await fetch(url, { method: "POST" });
-
           if (response.status === 429) {
             const errorDetail = await response.json();
             const cooldownMatch = errorDetail.detail.match(/(\d+)/);
-            if (cooldownMatch) {
+            if (cooldownMatch)
               setButtonState("COOLDOWN", parseInt(cooldownMatch[1], 10));
-            }
             return;
           }
-
           if (!response.ok)
             throw new Error(`HTTP error! Status: ${response.status}`);
 
           const result = await response.json();
           if (result.status === "started" || result.status === "in_progress") {
-            logsDiv.innerHTML =
-              "<div>Update started... Polling for status.</div>";
-            stopPolling();
-            appState.pollingInterval = setInterval(pollForStatus, 2000);
+            connectToEventStream(); // Start listening for SSE updates
           }
         } catch (error) {
           errorMessageP.textContent =
@@ -479,66 +416,101 @@
         }
       }
 
-      async function pollForStatus() {
+      function connectToEventStream() {
+        closeEventStream(); // Ensure any old connection is closed
         const gameName = gameNameInput.value.trim();
         const tagLine = tagLineInput.value.trim();
-        const url = `http://localhost:8000/status/${encodeURIComponent(
+        const url = `http://localhost:8000/stream-status/${encodeURIComponent(
           gameName
         )}/${encodeURIComponent(tagLine)}`;
 
-        try {
-          const response = await fetch(url);
-          if (!response.ok)
-            throw new Error(`Server returned status: ${response.status}`);
+        appState.eventSource = new EventSource(url);
+        const state = appState.isDataLoaded ? "UPDATING" : "POLLING";
+        setButtonState(state);
+        updateProgress(0, 100);
+        logsDiv.innerHTML =
+          "<div>Connection opened. Waiting for updates...</div>";
 
-          const statusData = await response.json();
-          logsDiv.innerHTML = `<div>${
-            statusData.message || "Checking status..."
-          }</div>`;
+        appState.eventSource.onmessage = (event) => {
+          const statusData = JSON.parse(event.data);
 
-          switch (statusData.status) {
-            case "progress":
-              updateProgress(statusData.processed, statusData.total);
-              break;
-            case "ready":
-              stopPolling();
-              updateProgress(100, 100);
-              logsDiv.innerHTML =
-                "<div>Update complete! Fetching final data...</div>";
-              setTimeout(fetchAndRenderHistory, 500); // Fetch the new data
-              break;
-            case "cooldown":
-              stopPolling();
-              const cooldownTime = statusData.cooldown_remaining || 0;
-              logsDiv.innerHTML = `<div>Player is in cooldown. Remaining time: ${cooldownTime}s</div>`;
-              setButtonState("COOLDOWN", Math.ceil(cooldownTime));
-              break;
-            case "idle_no_data": // Should not happen during polling, but handle defensively
-              stopPolling();
-              setButtonState("IDLE_NO_DATA");
-              break;
+          if (statusData.status === "progress") {
+            logsDiv.innerHTML = `<div>Processing...</div>`;
+            updateProgress(statusData.processed, statusData.total);
+          } else if (statusData.status === "ready") {
+            closeEventStream();
+            updateProgress(100, 100);
+            logsDiv.innerHTML =
+              "<div>Update complete! Fetching final data...</div>";
+            setTimeout(fetchAndRenderHistory, 500);
+          } else if (statusData.status === "idle_no_data") {
+            // This means an update was triggered but found no new games
+            closeEventStream();
+            logsDiv.innerHTML = "<div>No new games found.</div>";
+            setButtonState(
+              appState.isDataLoaded ? "IDLE_WITH_DATA" : "IDLE_NO_DATA"
+            );
           }
-        } catch (error) {
-          stopPolling();
-          errorMessageP.textContent = "Polling failed. Is the server running?";
-          console.error("Polling error:", error);
+        };
+
+        appState.eventSource.onerror = (error) => {
+          console.error("EventSource failed:", error);
+          closeEventStream();
+          errorMessageP.textContent =
+            "Connection to status stream lost. Please try again.";
           setButtonState(
             appState.isDataLoaded ? "IDLE_WITH_DATA" : "IDLE_NO_DATA"
           );
-        }
+        };
+      }
+
+      async function initializePlayerState() {
+        if (!validateInputs()) return;
+        // First, display whatever is in the cache immediately
+        await fetchAndRenderHistory();
+
+        // Then, open a stream to check for an ongoing update
+        const gameName = gameNameInput.value.trim();
+        const tagLine = tagLineInput.value.trim();
+        const url = `http://localhost:8000/stream-status/${encodeURIComponent(
+          gameName
+        )}/${encodeURIComponent(tagLine)}`;
+
+        const initialStream = new EventSource(url);
+
+        initialStream.onmessage = (event) => {
+          const statusData = JSON.parse(event.data);
+          // If the first thing we hear is "progress", it means a job was already running.
+          // We connect our main event source to it.
+          if (statusData.status === "progress") {
+            logsDiv.innerHTML =
+              "<div>Found an update already in progress!</div>";
+            connectToEventStream();
+          }
+          // In any other case (ready, idle_no_data), the job is not running, so we just close.
+          initialStream.close();
+        };
+
+        initialStream.onerror = (error) => {
+          // It's normal for this to fail if the server is just starting, so don't show a big error.
+          console.log(
+            "Initial status check complete or failed, no active job found."
+          );
+          initialStream.close();
+        };
       }
 
       // --- MAIN EVENT LISTENERS & INITIALIZATION ---
       fetchButton.addEventListener("click", async () => {
         if (!validateInputs()) return;
-        localStorage.setItem("lastGameName", gameNameInput.value.trim());
-        localStorage.setItem("lastTagLine", tagLineInput.value.trim());
 
+        // If data is already loaded, the button is for "Update"
         if (appState.isDataLoaded) {
-          triggerUpdate(); // If data is already loaded, button press always means update
+          triggerUpdate();
         } else {
-          // Try to fetch history first. If it's not there (returns false), then trigger an update.
+          // If no data is loaded, first try to fetch from cache.
           const hasCache = await fetchAndRenderHistory();
+          // Only if there's no cache, trigger a new update.
           if (!hasCache) {
             triggerUpdate();
           }
@@ -548,13 +520,7 @@
       document.addEventListener("DOMContentLoaded", () => {
         gameNameInput.value = localStorage.getItem("lastGameName") || "";
         tagLineInput.value = localStorage.getItem("lastTagLine") || "";
-        if (gameNameInput.value && tagLineInput.value) {
-          // On page load, automatically try to fetch existing data
-          fetchAndRenderHistory();
-        } else {
-          setButtonState("IDLE_NO_DATA");
-          validateInputs();
-        }
+        initializePlayerState(); // Check for cached data and ongoing jobs on load
       });
 
       function handleInputChange() {

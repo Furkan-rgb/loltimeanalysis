@@ -3,8 +3,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from arq.connections import create_pool, RedisSettings, ArqRedis
-
-# Import our refactored modules
+import asyncio
+import json
+from fastapi.responses import StreamingResponse
 import config
 import redis
 
@@ -117,50 +118,51 @@ async def trigger_update_job(game_name: str, tag_line: str, region: str = "europ
     return {"status": "started"}
 
 
-@app.get("/status/{game_name}/{tag_line}")
-def get_update_status(game_name: str, tag_line: str):
+@app.get("/stream-status/{game_name}/{tag_line}")
+async def stream_status(game_name: str, tag_line: str):
     """
-    Polls the status of a running update job.
+    Streams status updates using Server-Sent Events (SSE).
+    This keeps a connection open and pushes data as the job progresses.
     """
     player_id = f"{game_name.lower()}#{tag_line.lower()}"
-    lock_key = f"lock:{player_id}"
-    aggregation_key = f"job:{player_id}:agg"
-    cache_key = f"cache:{player_id}"
-    cooldown_key = f"cooldown:{player_id}"
 
-    # First, check for cooldown
-    if (cooldown_ttl := redis_service.get_cooldown_ttl(cooldown_key)) > 0:
-        return {
-            "status": "cooldown",
-            "message": f"Player is in cooldown. Remaining time: {cooldown_ttl} seconds.",
-            "cooldown_remaining": cooldown_ttl,
-        }
+    async def event_generator():
+        """Yields status updates as SSE messages."""
+        last_status = None
+        while True:
+            # --- The logic to check Redis is the same as before ---
+            lock_key = f"lock:{player_id}"
+            aggregation_key = f"job:{player_id}:agg"
+            cache_key = f"cache:{player_id}"
 
-    # Check the aggregation key for detailed progress
-    status_data = redis_service.redis_client.hgetall(aggregation_key)
-    if status_data:
-        return {
-            "status": "progress",
-            "message": f"Processing {status_data.get('processed', 0)} of {status_data.get('total', 1)} matches...",
-            "processed": int(status_data.get("processed", 0)),
-            "total": int(status_data.get("total", 1)),
-        }
+            current_status = {}
+            status_data = redis_service.redis_client.hgetall(aggregation_key)
 
-    # If no aggregation key, check if a lock still exists (job is starting up)
-    if redis_service.redis_client.exists(lock_key):
-        return {
-            "status": "progress",
-            "message": "Job is starting up...",
-            "processed": 0,
-            "total": 100,  # A default total for the initial phase
-        }
+            if status_data:
+                current_status = {
+                    "status": "progress",
+                    "processed": int(status_data.get("processed", 0)),
+                    "total": int(status_data.get("total", 1)),
+                }
+            elif redis_service.redis_client.exists(lock_key):
+                current_status = {"status": "progress", "processed": 0, "total": 100}
+            elif redis_service.redis_client.exists(cache_key):
+                current_status = {"status": "ready"}
+            else:
+                current_status = {"status": "idle_no_data"}
 
-    # If no job is active, check if the final data exists. This is our "complete" signal.
-    if redis_service.redis_client.exists(cache_key):
-        return {"status": "ready", "message": "Data is ready in cache."}
+            # --- Push an update only if the status has changed ---
+            if current_status != last_status:
+                yield f"data: {json.dumps(current_status)}\n\n"
+                last_status = current_status
 
-    # If we reach here, there's no active job and no cached data.
-    return {"status": "idle_no_data", "message": "No data found for this player."}
+            # If the job is done or not found, close the stream
+            if current_status["status"] in ["ready", "idle_no_data"]:
+                break
+
+            await asyncio.sleep(1)  # Check for updates every second
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # --- LOCAL DEVELOPMENT RUNNER ---

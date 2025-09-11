@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LoL Ranked History Viewer</title>
+    <style>
+        /* Light theme (default) */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            background-color: #f0f2f5;
+            color: #1c1e21;
+            padding: 2em;
+            max-width: 800px;
+            margin: 0 auto;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        .container {
+            background-color: #fff;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        h1, h3 {
+            color: #333;
+            transition: color 0.3s ease;
+        }
+
+        /* Dark theme */
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #18191a;
+                color: #e4e6ea;
+            }
+            .container {
+                background-color: #242526;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            }
+            h1, h3 {
+                color: #e4e6ea;
+            }
+        }
+        #controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 1em;
+        }
+        input[type="text"], input[type="number"] {
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 1rem;
+            background-color: #fff;
+            color: #1c1e21;
+            transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            input[type="text"], input[type="number"] {
+                background-color: #3a3b3c;
+                color: #e4e6ea;
+                border-color: #5a5b5c;
+            }
+            input[type="text"]:focus, input[type="number"]:focus {
+                border-color: #0084ff;
+                outline: none;
+            }
+        }
+        #fetchButton {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            background-color: #007bff;
+            color: white;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            min-width: 120px; /* Give button a consistent width */
+            text-align: center;
+        }
+        #fetchButton:disabled {
+            background-color: #a9a9a9;
+            cursor: not-allowed;
+        }
+        #fetchButton:hover:not(:disabled) {
+            background-color: #0056b3;
+        }
+        #progress-container { 
+            width: 100%; 
+            background-color: #e9ecef; 
+            border-radius: 6px; 
+            overflow: hidden; 
+            margin-bottom: 1em; 
+            position: relative;
+            height: 24px;
+        }
+        #progress-bar { 
+            width: 0%; 
+            height: 24px; 
+            background-color: #28a745; 
+            transition: width 0.4s ease;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        #progress-text {
+            position: absolute;
+            top: 0;
+            left: 10px;
+            height: 24px;
+            line-height: 24px;
+            color: #000;
+            font-weight: 500;
+            z-index: 1;
+        }
+        #logs { 
+            background-color: #f8f9fa; 
+            border: 1px solid #dee2e6; 
+            border-radius: 6px; 
+            padding: 10px; 
+            max-height: 200px; 
+            overflow-y: auto; 
+            margin-bottom: 1em; 
+            font-family: monospace;
+            transition: background-color 0.3s ease, border-color 0.3s ease;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            #logs {
+                background-color: #3a3b3c;
+                border-color: #5a5b5c;
+                color: #e4e6ea;
+            }
+        }
+        #results-container table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1em;
+        }
+        #results-container th, #results-container td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+            transition: border-color 0.3s ease;
+        }
+        #results-container th {
+            background-color: #f8f9fa;
+            transition: background-color 0.3s ease;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            #results-container th, #results-container td {
+                border-bottom-color: #5a5b5c;
+            }
+            #results-container th {
+                background-color: #3a3b3c;
+            }
+        }
+        #error-message {
+            color: #dc3545;
+            min-height: 1.2em;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Fetch LoL Ranked History</h1>
+
+        <div id="controls">
+            <input type="text" id="gameName" placeholder="Game Name (e.g., Faker)">
+            <span>#</span>
+            <input type="text" id="tagLine" placeholder="Tag (e.g., KR1)">
+            <button id="fetchButton">Fetch History</button>
+        </div>
+        <p id="error-message"></p>
+
+        <h3>Logs:</h3>
+        <div id="logs"></div>
+
+        <h3>Progress:</h3>
+        <div id="progress-container">
+            <div id="progress-bar"></div>
+            <div id="progress-text">0 / 100 (0%)</div>
+        </div>
+
+        <h3>Match History:</h3>
+        <div id="results-container">Data will appear here once fetched.</div>
+    </div>
+
+<script>
+    // --- DOM ELEMENT SELECTION ---
+    const fetchButton = document.getElementById('fetchButton');
+    const gameNameInput = document.getElementById('gameName');
+    const tagLineInput = document.getElementById('tagLine');
+    const logsDiv = document.getElementById('logs');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+    const resultsContainer = document.getElementById('results-container');
+    const errorMessageP = document.getElementById('error-message');
+
+    // --- STATE MANAGEMENT ---
+    const appState = {
+        isDataLoaded: false,
+        cooldownInterval: null,
+        pollingInterval: null, // To manage the status polling
+    };
+
+    // --- UI HELPER FUNCTIONS ---
+    function validateInputs() {
+        const gameName = gameNameInput.value.trim();
+        const tagLine = tagLineInput.value.trim();
+        const hasInputs = gameName && tagLine;
+
+        if (!hasInputs) {
+            errorMessageP.textContent = "Please enter both a Game Name and a Tag Line.";
+        } else {
+            errorMessageP.textContent = ''; // Clear error when valid
+        }
+        
+        // Only enable the button if inputs are valid AND it's not in a disabled state
+        const isDisabledState = fetchButton.disabled || fetchButton.textContent.includes('Cooldown');
+        if (!isDisabledState) {
+            fetchButton.disabled = !hasInputs;
+        }
+        
+        return hasInputs;
+    }
+    
+    function stopPolling() {
+        if (appState.pollingInterval) {
+            clearInterval(appState.pollingInterval);
+            appState.pollingInterval = null;
+        }
+    }
+    
+    function stopCooldown() {
+        if (appState.cooldownInterval) {
+            clearInterval(appState.cooldownInterval);
+            appState.cooldownInterval = null;
+        }
+    }
+
+    function setButtonState(state, duration = 0) {
+        stopCooldown(); // Stop any previous cooldown timers
+        fetchButton.disabled = false;
+
+        switch (state) {
+            case 'IDLE_NO_DATA':
+                fetchButton.textContent = 'Fetch History';
+                break;
+            case 'IDLE_WITH_DATA':
+                fetchButton.textContent = 'Update';
+                break;
+            case 'POLLING':
+                fetchButton.textContent = 'Fetching...';
+                fetchButton.disabled = true;
+                break;
+            case 'UPDATING':
+                fetchButton.textContent = 'Updating...';
+                fetchButton.disabled = true;
+                break;
+            case 'COOLDOWN':
+                let timer = duration;
+                fetchButton.disabled = true;
+                fetchButton.textContent = `Cooldown (${timer}s)`;
+
+                appState.cooldownInterval = setInterval(() => {
+                    timer--;
+                    if (timer <= 0) {
+                        stopCooldown();
+                        setButtonState(appState.isDataLoaded ? 'IDLE_WITH_DATA' : 'IDLE_NO_DATA'); 
+                    } else {
+                        fetchButton.textContent = `Cooldown (${timer}s)`;
+                    }
+                }, 1000);
+                break;
+        }
+        validateInputs();
+    }
+    
+    function updateProgress(processed = 0, total = 100) {
+        const percentage = total > 0 ? Math.round((processed / total) * 100) : 0;
+        progressBar.style.width = percentage + '%';
+        progressText.textContent = `${processed} / ${total} (${percentage}%)`;
+    }
+
+    function renderResultsAsTable(data) {
+        if (!data || data.length === 0) {
+            resultsContainer.innerHTML = '<p>No recent ranked match data found for this player.</p>';
+            return;
+        }
+        let tableHTML = `<table><thead><tr><th>Date</th><th>Time</th><th>Champion</th><th>Outcome</th><th>Role</th></tr></thead><tbody>`;
+        for (const game of data) {
+            const outcomeStyle = game.outcome === 'Win' ? 'color: #28a745;' : 'color: #dc3545;';
+            tableHTML += `
+                <tr>
+                    <td>${game.date}</td>
+                    <td>${game.time_start || 'N/A'}</td>
+                    <td>${game.champion}</td>
+                    <td style="${outcomeStyle}">${game.outcome}</td>
+                    <td>${game.role || 'N/A'}</td>
+                </tr>
+            `;
+        }
+        tableHTML += '</tbody></table>';
+        resultsContainer.innerHTML = tableHTML;
+    }
+    
+    function resetUIForNewPlayer() {
+        if (appState.isDataLoaded) {
+            appState.isDataLoaded = false;
+            resultsContainer.innerHTML = 'Data will appear here once fetched.';
+            logsDiv.innerHTML = '';
+            updateProgress(0, 100);
+            errorMessageP.textContent = '';
+            setButtonState('IDLE_NO_DATA');
+        }
+        // Always stop polling when the user types a new name
+        stopPolling();
+    }
+
+    // --- NEW POLLING-BASED LOGIC ---
+    
+    async function pollForStatus() {
+        const gameName = gameNameInput.value;
+        const tagLine = tagLineInput.value;
+        const url = `http://localhost:8000/fetch-status/?game_name=${gameName}&tag_line=${tagLine}`;
+
+        try {
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`Server returned status: ${response.status}`);
+            }
+            const statusData = await response.json();
+
+            // Handle different statuses from the backend
+            switch (statusData.status) {
+                case 'in_progress':
+                case 'progress':
+                    logsDiv.innerHTML = `<div>${statusData.message || 'Processing...'}</div>`;
+                    updateProgress(statusData.processed, statusData.total);
+                    break;
+                
+                case 'complete':
+                    stopPolling();
+                    logsDiv.innerHTML = `<div>${statusData.message || 'Completed!'}</div>`;
+                    // Show 100% completion first
+                    updateProgress(statusData.total || 100, statusData.total || 100);
+                    
+                    // Brief delay to show completion, then fetch the cached data
+                    setTimeout(() => {
+                        startFetch(false); // Call startFetch again, but it will now hit the cache
+                    }, 1000);
+                    break;
+
+                case 'error':
+                    stopPolling();
+                    errorMessageP.textContent = statusData.message || 'An unknown error occurred.';
+                    setButtonState(appState.isDataLoaded ? 'IDLE_WITH_DATA' : 'IDLE_NO_DATA');
+                    break;
+
+                default:
+                    // This handles idle_data_exists and idle_no_data
+                    stopPolling();
+                    setButtonState(appState.isDataLoaded ? 'IDLE_WITH_DATA' : 'IDLE_NO_DATA');
+                    break;
+            }
+        } catch (error) {
+            stopPolling();
+            errorMessageP.textContent = "Connection Failed. Is the server running?";
+            console.error("Polling error:", error);
+            setButtonState(appState.isDataLoaded ? 'IDLE_WITH_DATA' : 'IDLE_NO_DATA');
+        }
+    }
+
+    async function startFetch(isForcedUpdate = false) {
+        if (!validateInputs()) return;
+
+        logsDiv.innerHTML = '';
+        errorMessageP.textContent = '';
+        
+        const state = appState.isDataLoaded ? 'UPDATING' : 'POLLING';
+        setButtonState(state);
+
+        const gameName = gameNameInput.value;
+        const tagLine = tagLineInput.value;
+        
+        let url = `http://localhost:8000/fetch-history/?game_name=${gameName}&tag_line=${tagLine}`;
+        if (isForcedUpdate) {
+            url += "&force_update=true";
+        }
+        
+        try {
+            const response = await fetch(url, { method: 'POST' });
+
+            if (response.status === 429) { // Cooldown error
+                const errorDetail = await response.json();
+                const cooldownMatch = errorDetail.detail.match(/(\d+)/);
+                if (cooldownMatch) {
+                    setButtonState('COOLDOWN', parseInt(cooldownMatch[1], 10));
+                }
+                return;
+            }
+
+            if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+
+            const result = await response.json();
+
+            switch (result.status) {
+                case 'cached':
+                    logsDiv.innerHTML = '<div>Found fresh data in cache!</div>';
+                    renderResultsAsTable(result.data);
+                    appState.isDataLoaded = true;
+                    setButtonState('IDLE_WITH_DATA');
+                    break;
+                case 'started':
+                case 'in_progress':
+                    logsDiv.innerHTML = '<div>Fetch started... Polling for status.</div>';
+                    stopPolling(); // Ensure no old pollers are running
+                    appState.pollingInterval = setInterval(pollForStatus, 2000);
+                    break;
+            }
+        } catch (error) {
+            errorMessageP.textContent = 'Failed to start fetch. Check server connection.';
+            console.error("Fetch start error:", error);
+            setButtonState(appState.isDataLoaded ? 'IDLE_WITH_DATA' : 'IDLE_NO_DATA');
+        }
+    }
+
+    // --- MAIN EVENT LISTENER ---
+    fetchButton.addEventListener('click', () => {
+        // Save inputs to localStorage
+        localStorage.setItem('lastGameName', gameNameInput.value.trim());
+        localStorage.setItem('lastTagLine', tagLineInput.value.trim());
+        
+        const isUpdate = appState.isDataLoaded;
+        startFetch(isUpdate);
+    });
+
+    // --- INITIALIZATION ---
+    document.addEventListener('DOMContentLoaded', () => {
+        gameNameInput.value = localStorage.getItem('lastGameName') || '';
+        tagLineInput.value = localStorage.getItem('lastTagLine') || '';
+        setButtonState('IDLE_NO_DATA');
+        validateInputs();
+    });
+
+    // --- INPUT EVENT LISTENERS ---
+    gameNameInput.addEventListener('input', () => { resetUIForNewPlayer(); validateInputs(); });
+    tagLineInput.addEventListener('input', () => { resetUIForNewPlayer(); validateInputs(); });
+</script>
+
+</body>
+</html>

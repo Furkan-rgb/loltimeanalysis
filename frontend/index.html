@@ -368,13 +368,14 @@
 
         // ALWAYS check for ongoing updates, regardless of cached data
         const ongoingUpdate = await checkForOngoingUpdate(gameName, tagLine);
-        if (ongoingUpdate) {
-          // If we have cached data, update the log to show both
-          if (hasCachedData) {
+        if (ongoingUpdate.hasUpdate) {
+          // If we have cached data and it's a progress update, update the log to show both
+          if (hasCachedData && ongoingUpdate.type === "progress") {
             logsDiv.innerHTML =
               "<div>Cached data displayed. Found ongoing update! Connecting to progress...</div>";
           }
-          return true; // We're now tracking an ongoing update
+          // For cooldown or complete, the checkForOngoingUpdate already set the appropriate message
+          return true; // We're now tracking an ongoing update or in cooldown
         }
 
         // If no ongoing update, set appropriate button state
@@ -396,7 +397,7 @@
 
         try {
           const response = await fetch(statusUrl);
-          if (!response.ok) return false;
+          if (!response.ok) return { hasUpdate: false };
 
           const statusData = await response.json();
 
@@ -410,20 +411,26 @@
             // Start polling for this ongoing update
             stopPolling();
             appState.pollingInterval = setInterval(pollForStatus, 2000);
-            return true;
+            return { hasUpdate: true, type: "progress" };
           } else if (statusData.status === "complete") {
             // Update just finished, fetch the new data
             logsDiv.innerHTML =
               "<div>Update recently completed! Fetching data...</div>";
             setTimeout(() => fetchAndRenderHistory(), 500);
-            return true;
+            return { hasUpdate: true, type: "complete" };
+          } else if (statusData.status === "cooldown") {
+            // Player is in cooldown
+            const cooldownTime = statusData.cooldown_remaining || 0;
+            logsDiv.innerHTML = `<div>Player is in cooldown. Remaining time: ${cooldownTime}s</div>`;
+            setButtonState("COOLDOWN", Math.ceil(cooldownTime));
+            return { hasUpdate: true, type: "cooldown" };
           }
 
           // No ongoing update (idle_no_data or other status)
-          return false;
+          return { hasUpdate: false };
         } catch (error) {
           console.error("Error checking for ongoing update:", error);
-          return false;
+          return { hasUpdate: false };
         }
       }
 
@@ -499,6 +506,12 @@
               logsDiv.innerHTML =
                 "<div>Update complete! Fetching final data...</div>";
               setTimeout(fetchAndRenderHistory, 500); // Fetch the new data
+              break;
+            case "cooldown":
+              stopPolling();
+              const cooldownTime = statusData.cooldown_remaining || 0;
+              logsDiv.innerHTML = `<div>Player is in cooldown. Remaining time: ${cooldownTime}s</div>`;
+              setButtonState("COOLDOWN", Math.ceil(cooldownTime));
               break;
             case "idle_no_data": // Should not happen during polling, but handle defensively
               stopPolling();

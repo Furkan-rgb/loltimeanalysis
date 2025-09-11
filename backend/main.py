@@ -126,6 +126,15 @@ def get_update_status(game_name: str, tag_line: str):
     lock_key = f"lock:{player_id}"
     aggregation_key = f"job:{player_id}:agg"
     cache_key = f"cache:{player_id}"
+    cooldown_key = f"cooldown:{player_id}"
+
+    # First, check for cooldown
+    if (cooldown_ttl := redis_service.get_cooldown_ttl(cooldown_key)) > 0:
+        return {
+            "status": "cooldown",
+            "message": f"Player is in cooldown. Remaining time: {cooldown_ttl} seconds.",
+            "cooldown_remaining": cooldown_ttl,
+        }
 
     # Check the aggregation key for detailed progress
     status_data = redis_service.redis_client.hgetall(aggregation_key)

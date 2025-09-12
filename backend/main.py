@@ -3,14 +3,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from arq.connections import create_pool, RedisSettings, ArqRedis
-
-# Import our refactored modules
+import asyncio
+import json
+from fastapi.responses import StreamingResponse
 import config
 import redis
 
 try:
     # This import will now fail if the synchronous client can't connect
-    import redis_service 
+    import redis_service
 except redis.exceptions.ConnectionError:
     # The error is already printed by redis_service, just exit.
     sys.exit(1)
@@ -19,6 +20,7 @@ except redis.exceptions.ConnectionError:
 
 # This global variable will hold the ARQ connection pool
 arq_redis_pool: ArqRedis | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,7 +33,9 @@ async def lifespan(app: FastAPI):
     try:
         # 1. Initialize ARQ connection pool
         arq_redis_pool = await create_pool(
-            RedisSettings(host=config.REDIS_HOST, port=config.REDIS_PORT, database=config.REDIS_DB)
+            RedisSettings(
+                host=config.REDIS_HOST, port=config.REDIS_PORT, database=config.REDIS_DB
+            )
         )
         # 2. Verify the ARQ pool connection
         await arq_redis_pool.ping()
@@ -41,14 +45,15 @@ async def lifespan(app: FastAPI):
         print(f"FATAL: Could not establish ARQ connection to Redis: {e}")
         print("Application will not start.")
         sys.exit(1)
-    
+
     # If all checks pass, yield to let the app run
     yield
-    
+
     # Code to run on shutdown
     print("FastAPI shutting down: Closing ARQ connection pool...")
     if arq_redis_pool:
         await arq_redis_pool.close()
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -64,70 +69,105 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- API ENDPOINTS ---
 
-@app.post("/fetch-history/")
-async def start_fetch_job(game_name: str, tag_line: str, region: str = "europe", force_update: bool = False):
+@app.get("/history/{game_name}/{tag_line}")
+def get_history(game_name: str, tag_line: str):
     """
-    Initiates a background job to fetch match history.
-    This endpoint is non-blocking and returns a status immediately.
+    Retrieves a player's match history directly from the cache.
+    This is a simple, non-blocking read operation.
     """
     player_id = f"{game_name.lower()}#{tag_line.lower()}"
     cache_key = f"cache:{player_id}"
+
+    if cached_data := redis_service.get_from_cache(cache_key):
+        print(f"CACHE HIT for {player_id}")
+        return {"status": "cached", "data": cached_data}
+
+    # If no data is found in the cache, return a 404
+    raise HTTPException(
+        status_code=404,
+        detail="No match history found for this player. Please trigger an update.",
+    )
+
+
+@app.post("/update/{game_name}/{tag_line}")
+async def trigger_update_job(game_name: str, tag_line: str, region: str = "europe"):
+    """
+    Triggers a background job to fetch or update a player's match history.
+    This is a non-blocking action endpoint.
+    """
+    player_id = f"{game_name.lower()}#{tag_line.lower()}"
     cooldown_key = f"cooldown:{player_id}"
     lock_key = f"lock:{player_id}"
 
-    # 1. Immediately return cached data if available and not forcing an update
-    if not force_update:
-        if cached_data := redis_service.get_from_cache(cache_key):
-            print(f"CACHE HIT for {player_id}")
-            return {"status": "cached", "data": cached_data}
-
-    # 2. Check for cooldown
+    # 1. Check for cooldown
     if (ttl := redis_service.get_cooldown_ttl(cooldown_key)) > 0:
-        raise HTTPException(status_code=429, detail=f"This player is on a cooldown. Please try again in {ttl} seconds.")
+        raise HTTPException(
+            status_code=429,  # Too Many Requests
+            detail=f"This player is on a cooldown. Please try again in {ttl} seconds.",
+        )
 
-    # 3. Check if a job is already running (by checking for the lock key)
-    if redis_service.redis_client.exists(lock_key):
-         print(f"Fetch already in progress for {player_id}")
-         return {"status": "in_progress"}
+    # 2. Atomically acquire the lock
+    if not redis_service.acquire_lock(lock_key, config.LOCK_TIMEOUT_SECONDS):
+        print(f"Update already in progress for {player_id}")
+        return {"status": "in_progress"}
 
-    # 4. Enqueue the new job for the ARQ worker
-    print(f"Enqueuing fetch job for {player_id}")
-    await arq_redis_pool.enqueue_job(
-        'fetch_ranked_history_task', game_name, tag_line, region
-    )
+    # 3. Enqueue the dispatcher job
+    print(f"Lock acquired. Enqueuing dispatcher job for {player_id}")
+    await arq_redis_pool.enqueue_job("dispatch_fetch_job", game_name, tag_line, region)
     return {"status": "started"}
 
-@app.get("/fetch-status/")
-def get_fetch_status(game_name: str, tag_line: str):
+
+@app.get("/stream-status/{game_name}/{tag_line}")
+async def stream_status(game_name: str, tag_line: str):
     """
-    Poll this endpoint to get the status of a running fetch job.
-    The frontend will call this repeatedly to update the UI.
+    Streams status updates using Server-Sent Events (SSE).
+    This keeps a connection open and pushes data as the job progresses.
     """
     player_id = f"{game_name.lower()}#{tag_line.lower()}"
-    status_key = f"status:{player_id}"
-    cache_key = f"cache:{player_id}"
-    
-    status_data = redis_service.redis_client.hgetall(status_key)
-    
-    if not status_data:
-        # If no status is being reported, check if data exists in the cache
-        # to determine if the user has fetched this player before.
-        if redis_service.get_from_cache(cache_key):
-            return {"status": "idle_data_exists"}
-        return {"status": "idle_no_data"}
-        
-    # The worker stores numbers as strings, so convert them for the frontend
-    if 'processed' in status_data:
-        status_data['processed'] = int(status_data['processed'])
-    if 'total' in status_data:
-        status_data['total'] = int(status_data['total'])
-        
-    return status_data
+
+    async def event_generator():
+        """Yields status updates as SSE messages."""
+        last_status = None
+        while True:
+            # --- The logic to check Redis is the same as before ---
+            lock_key = f"lock:{player_id}"
+            aggregation_key = f"job:{player_id}:agg"
+            cache_key = f"cache:{player_id}"
+
+            current_status = {}
+            status_data = redis_service.redis_client.hgetall(aggregation_key)
+
+            if status_data:
+                current_status = {
+                    "status": "progress",
+                    "processed": int(status_data.get("processed", 0)),
+                    "total": int(status_data.get("total", 1)),
+                }
+            elif redis_service.redis_client.exists(lock_key):
+                current_status = {"status": "progress", "processed": 0, "total": 100}
+            elif redis_service.redis_client.exists(cache_key):
+                current_status = {"status": "ready"}
+            else:
+                current_status = {"status": "idle_no_data"}
+
+            # --- Push an update only if the status has changed ---
+            if current_status != last_status:
+                yield f"data: {json.dumps(current_status)}\n\n"
+                last_status = current_status
+
+            # If the job is done or not found, close the stream
+            if current_status["status"] in ["ready", "idle_no_data"]:
+                break
+
+            await asyncio.sleep(1)  # Check for updates every second
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 # --- LOCAL DEVELOPMENT RUNNER ---
 if __name__ == "__main__":
     import uvicorn
+
     # Note: reload=True is great for development but should be False in production.
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

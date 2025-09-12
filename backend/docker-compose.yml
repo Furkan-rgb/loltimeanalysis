@@ -1,0 +1,30 @@
+# docker-compose.yml
+
+version: '3.8'
+
+services:
+  # This defines our Redis service
+  redis:
+    # Use the official Redis image from Docker Hub
+    image: redis:latest
+    
+    # A friendly name for your container
+    container_name: my-redis-cache
+    
+    # Map the port from your computer (host) to the container
+    # Format is "HOST:CONTAINER"
+    # This allows your Python app on localhost to talk to Redis in the container
+    ports:
+      - "6379:6379"
+      
+    # This is the key to making it stateful
+    # It maps the 'redis-data' volume to the '/data' directory inside the container,
+    # which is where Redis stores its database file.
+    volumes:
+      - redis-data:/data
+
+# This top-level block formally declares the Docker volume
+# Docker will manage this volume for us.
+volumes:
+  redis-data:
+  

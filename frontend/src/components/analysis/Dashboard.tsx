@@ -1070,19 +1070,37 @@ const RollingWinRateTrend: React.FC<{
     return trendData;
   }, [trendData]);
 
+  // Compute a slow-moving trend (EMA) over the rolling win rate series
+  const dataWithSlowTrend = useMemo(() => {
+    if (plottedData.length === 0)
+      return [] as Array<(typeof plottedData)[number] & { slowTrend: number }>;
+    // Default slow period ~ 2x of the rolling window, with a sensible minimum
+    const slowPeriod = Math.max(10, Math.round(windowSize * 2));
+    const alpha = 2 / (slowPeriod + 1);
+    let ema = plottedData[0].winRate;
+    const out = plottedData.map((d, i) => {
+      if (i === 0) {
+        return { ...d, slowTrend: ema };
+      }
+      ema = alpha * d.winRate + (1 - alpha) * ema;
+      return { ...d, slowTrend: ema };
+    });
+    return out;
+  }, [plottedData, windowSize]);
+
   return (
     <ResponsiveContainer width="100%" height={300}>
-      <LineChart key={windowSize} data={plottedData}>
+      <LineChart key={windowSize} data={dataWithSlowTrend}>
         <CartesianGrid strokeDasharray="3 3" />
         <XAxis
           dataKey="index"
-          interval={Math.max(0, Math.ceil(plottedData.length / 8) - 1)}
+          interval={Math.max(0, Math.ceil(dataWithSlowTrend.length / 8) - 1)}
           tickFormatter={(value: number) => {
             const i = Math.max(
               0,
-              Math.min(plottedData.length - 1, Number(value))
+              Math.min(dataWithSlowTrend.length - 1, Number(value))
             );
-            const d = plottedData[i]?.date;
+            const d = dataWithSlowTrend[i]?.date;
             return d
               ? new Date(d).toLocaleDateString(undefined, {
                   month: "short",
@@ -1119,6 +1137,19 @@ const RollingWinRateTrend: React.FC<{
           dot={{ r: 2 }}
           activeDot={{ r: 4 }}
           name="Rolling Win Rate"
+          unit="%"
+        />
+        {/* Slow-moving trend overlay (EMA) */}
+        <Line
+          type="monotone"
+          dataKey="slowTrend"
+          stroke="#dc2626"
+          strokeWidth={2.5}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          dot={false}
+          name="Slow Trend"
+          unit="%"
         />
       </LineChart>
     </ResponsiveContainer>
@@ -2482,7 +2513,7 @@ function Dashboard({ data }: DashboardProps) {
             {/* Smoothing Method Filter */}
             <div className="w-full md:flex-1 min-w-[180px] flex flex-col gap-1.5 relative">
               {smoothingMethod === "bayesian" && (
-                <div className="absolute bottom-full mb-2 w-full space-y-2">
+                <div className="absolute bottom-full mb-4 w-full space-y-2">
                   <div className="flex justify-between items-center">
                     <div className="flex items-center gap-2">
                       <Label htmlFor="k-slider">Adjustment Strength (k)</Label>

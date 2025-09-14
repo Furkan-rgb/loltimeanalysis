@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from "react";
 import type { MatchHistoryResponse, MatchHistoryData } from "@/types";
+import { ChevronDownIcon } from "lucide-react";
+import { type DateRange } from "react-day-picker";
 import {
   ResponsiveContainer,
   PieChart,
@@ -52,6 +54,13 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Slider } from "../ui/slider";
 import { Label } from "../ui/label";
 import "katex/dist/katex.min.css";
@@ -107,6 +116,10 @@ const getHeatmapColor = (winRate: number, totalGames: number): string => {
 };
 
 // --- Reusable Chart Tooltip ---
+// Helper not needed if timestamps are guaranteed ms; keeping in case of future inputs
+const normalizeToMs = (ts: number | undefined | null): number | undefined =>
+  typeof ts === "number" && !Number.isNaN(ts) ? ts : undefined;
+
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
     if (payload[0].payload.champion) {
@@ -122,9 +135,24 @@ const CustomTooltip = ({ active, payload, label }: any) => {
         </div>
       );
     }
+    // Prefer a point-level date if present; avoid interpreting numeric index labels as timestamps
+    let displayLabel: React.ReactNode = label;
+    try {
+      const tsRaw = payload?.[0]?.payload?.date as number | undefined;
+      const tsMs = normalizeToMs(tsRaw);
+      if (typeof tsMs === "number") {
+        displayLabel = new Date(tsMs).toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      }
+    } catch {}
     return (
       <div className="bg-white/80 backdrop-blur-sm p-2 border border-gray-200 rounded-md shadow-lg text-sm">
-        <p className="font-bold text-gray-800">{label}</p>
+        <p className="font-bold text-gray-800">{displayLabel}</p>
         {payload.map((pld: any, index: number) => (
           <p key={index} style={{ color: pld.color }}>
             {`${pld.name}: ${pld.value.toFixed(1)}`}
@@ -156,66 +184,26 @@ const StatCard: React.FC<{
   </Card>
 );
 
-const WinLossDoughnutChart: React.FC<{ data: MatchHistoryData }> = ({
-  data,
-}) => {
-  const chartData = useMemo(() => {
-    const stats = data.reduce(
-      (acc, game) => {
-        game.outcome === "Win" ? acc.wins++ : acc.losses++;
-        return acc;
-      },
-      { wins: 0, losses: 0 }
-    );
-    return [
-      { name: "Wins", value: stats.wins },
-      { name: "Losses", value: stats.losses },
-    ];
-  }, [data]);
-
-  const COLORS = ["hsl(var(--primary))", "hsl(var(--muted-foreground) / 0.5)"];
-
-  return (
-    <ResponsiveContainer width="100%" height={200}>
-      <PieChart>
-        <Pie
-          data={chartData}
-          dataKey="value"
-          nameKey="name"
-          cx="50%"
-          cy="50%"
-          innerRadius={60}
-          outerRadius={80}
-          paddingAngle={5}
-        >
-          {chartData.map((_, index) => (
-            <Cell
-              key={`cell-${index}`}
-              stroke={COLORS[index % COLORS.length]}
-              fill={COLORS[index % COLORS.length]}
-            />
-          ))}
-        </Pie>
-        <Tooltip content={<CustomTooltip />} />
-        {/* <Legend iconSize={10} verticalAlign="bottom" /> */}
-      </PieChart>
-    </ResponsiveContainer>
-  );
-};
+// Removed unused WinLossDoughnutChart component
 
 const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
   data,
 }) => {
   const chartConfig = {
-    wins: { label: "Wins", color: "hsl(var(--chart-2))" },
-    losses: { label: "Losses", color: "hsl(var(--chart-5))" },
-    TOP: { label: "Top", color: "hsl(var(--chart-1))" },
-    JUNGLE: { label: "Jungle", color: "hsl(var(--chart-2))" },
-    MIDDLE: { label: "Mid", color: "hsl(var(--chart-3))" },
-    BOTTOM: { label: "Bot", color: "hsl(var(--chart-4))" },
-    UTILITY: { label: "Support", color: "hsl(var(--chart-5))" },
-    UNKNOWN: { label: "Unknown", color: "hsl(var(--muted))" },
+    wins: { label: "Wins", color: "var(--chart-2)" },
+    losses: { label: "Losses", color: "var(--chart-5)" },
+    TOP: { label: "Top", color: "var(--chart-1)" },
+    JUNGLE: { label: "Jungle", color: "var(--chart-2)" },
+    MIDDLE: { label: "Mid", color: "var(--chart-3)" },
+    BOTTOM: { label: "Bot", color: "var(--chart-4)" },
+    UTILITY: { label: "Support", color: "var(--chart-5)" },
+    UNKNOWN: { label: "Unknown", color: "var(--muted)" },
   } satisfies ChartConfig;
+
+  // Map data "name" to configured color (fallback to muted)
+  const getColor = (name: string) =>
+    (chartConfig as Record<string, { label: string; color: string }>)[name]
+      ?.color ?? "var(--muted)";
 
   const { winLossData, roleData, totalGames } = useMemo(() => {
     const stats = data.reduce(
@@ -247,6 +235,8 @@ const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
     };
   }, [data]);
 
+  // Legend removed per request; keep chart simple
+
   return (
     <ChartContainer
       config={chartConfig}
@@ -264,8 +254,11 @@ const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
           innerRadius={50}
           outerRadius={70}
         >
-          <Label
-            content={({ viewBox }) => {
+          {winLossData.map((d, i) => (
+            <Cell key={`winloss-${i}`} fill={getColor(d.name)} />
+          ))}
+          <RechartsLabel
+            content={({ viewBox }: { viewBox?: any }) => {
               if (viewBox && "cx" in viewBox && "cy" in viewBox) {
                 return (
                   <text
@@ -300,7 +293,12 @@ const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
           nameKey="name"
           innerRadius={80}
           outerRadius={100}
-        />
+        >
+          {roleData.map((d, i) => (
+            <Cell key={`role-${i}`} fill={getColor(d.name)} />
+          ))}
+        </Pie>
+        {/* Legend removed */}
       </PieChart>
     </ChartContainer>
   );
@@ -312,12 +310,11 @@ const DailyWinRateChart: React.FC<{
   kValue: number;
 }> = ({ data, overallWinRate, smoothingMethod, kValue }) => {
   const dailyData = useMemo(() => {
-    // Note: The week starts on Sunday here. You can re-order if you prefer Monday first.
-    const dayOrder = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const dayOrder = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const stats = dayOrder.map((day) => ({ day, wins: 0, total: 0 }));
 
     data.forEach((game) => {
-      const dayIndex = new Date(game.timestamp * 1000).getDay();
+      const dayIndex = new Date(game.timestamp).getDay();
       stats[dayIndex].total++;
       if (game.outcome === "Win") stats[dayIndex].wins++;
     });
@@ -392,7 +389,7 @@ const HourlyWinRateHeatmap: React.FC<{
       );
 
     data.forEach((game) => {
-      const date = new Date(game.timestamp * 1000);
+      const date = new Date(game.timestamp);
       stats[date.getDay()][date.getHours()].total++;
       if (game.outcome === "Win") stats[date.getDay()][date.getHours()].wins++;
     });
@@ -561,7 +558,7 @@ const KeyInsights: React.FC<{
     ];
     const dayStats = days.map((day) => ({ name: day, wins: 0, total: 0 }));
     data.forEach((g) => {
-      const dayIndex = new Date(g.timestamp * 1000).getDay();
+      const dayIndex = new Date(g.timestamp).getDay();
       dayStats[dayIndex].total++;
       if (g.outcome === "Win") dayStats[dayIndex].wins++;
     });
@@ -650,9 +647,12 @@ const RollingWinRateTrend: React.FC<{
     for (let i = 0; i <= sortedGames.length - windowSize; i++) {
       const window = sortedGames.slice(i, i + windowSize);
       const wins = window.filter((g) => g.outcome === "Win").length;
+      const endTsMs = sortedGames[i + windowSize - 1].timestamp; // already ms
       rollingData.push({
         game: `Game ${i + windowSize}`,
         winRate: (wins / windowSize) * 100,
+        date: endTsMs,
+        index: i,
       });
     }
     return rollingData;
@@ -668,18 +668,41 @@ const RollingWinRateTrend: React.FC<{
     );
   }
 
+  // Ensure a visible line when only one data point exists
+  const plottedData = useMemo(() => {
+    if (trendData.length === 1) {
+      // Duplicate the single point with adjacent indices for a visible line
+      return [
+        { ...trendData[0], index: 0 },
+        { ...trendData[0], index: 1 },
+      ];
+    }
+    return trendData;
+  }, [trendData]);
+
   return (
     <ResponsiveContainer width="100%" height={300}>
-      <LineChart key={windowSize} data={trendData}>
+      <LineChart key={windowSize} data={plottedData}>
         <CartesianGrid strokeDasharray="3 3" />
         <XAxis
-          dataKey="game"
-          tick={false}
-          label={{
-            value: `Most Recent ${trendData.length} Games`,
-            position: "insideBottom",
-            offset: -5,
+          dataKey="index"
+          interval={Math.max(0, Math.ceil(plottedData.length / 8) - 1)}
+          tickFormatter={(value: number) => {
+            const i = Math.max(
+              0,
+              Math.min(plottedData.length - 1, Number(value))
+            );
+            const d = plottedData[i]?.date;
+            return d
+              ? new Date(d).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })
+              : String(value);
           }}
+          tickLine={false}
+          axisLine={false}
+          label={{ value: "Date", position: "insideBottom", offset: -5 }}
         />
         <YAxis domain={[0, 100]} unit="%" />
         <Tooltip content={<CustomTooltip />} />
@@ -688,12 +711,23 @@ const RollingWinRateTrend: React.FC<{
           stroke="hsl(var(--muted-foreground))"
           strokeDasharray="3 3"
         />
+        {trendData.length === 1 && (
+          <ReferenceLine
+            y={trendData[0].winRate}
+            stroke="hsl(var(--primary))"
+            strokeWidth={2}
+          />
+        )}
+        {/* Use a strong fixed color to avoid theme visibility issues */}
         <Line
           type="monotone"
           dataKey="winRate"
-          stroke="hsl(var(--primary))"
-          strokeWidth={2}
-          dot={false}
+          stroke="#2563eb"
+          strokeWidth={3}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          dot={{ r: 2 }}
+          activeDot={{ r: 4 }}
           name="Rolling Win Rate"
         />
       </LineChart>
@@ -930,7 +964,7 @@ const TimeOfDayHeatmap: React.FC<{
       );
 
     data.forEach((game) => {
-      const date = new Date(game.timestamp * 1000);
+      const date = new Date(game.timestamp);
       const dayIndex = date.getDay();
       const hour = date.getHours();
       const timeBlockIndex = timeBlocks.findIndex((block) =>
@@ -1022,6 +1056,473 @@ const TimeOfDayHeatmap: React.FC<{
   );
 };
 
+// --- Time-of-day K-means clustering scatter ---
+type ClusterPoint = {
+  dayIdx: number; // 0-6 (Sun-Sat)
+  hour: number; // 0-23
+  wr: number; // 0-100
+  total: number; // games
+  // feature vector cached for clustering
+  f: [number, number, number, number, number];
+};
+
+const dayShortLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function buildFeatures(
+  dayIdx: number,
+  hour: number,
+  wr: number,
+  wrWeight = 1
+): [number, number, number, number, number] {
+  const dayAngle = (2 * Math.PI * dayIdx) / 7;
+  const hourAngle = (2 * Math.PI * hour) / 24;
+  return [
+    Math.sin(dayAngle),
+    Math.cos(dayAngle),
+    Math.sin(hourAngle),
+    Math.cos(hourAngle),
+    (wr / 100) * wrWeight,
+  ];
+}
+
+function kmeans(
+  points: ClusterPoint[],
+  k: number,
+  maxIter = 50
+): { assignments: number[]; centroids: number[][]; inertia: number } {
+  if (points.length === 0)
+    return { assignments: [], centroids: [], inertia: 0 };
+  const n = points.length;
+  // Initialize centroids by picking k well-spaced points by hour order
+  const sortedByHour = [...points].sort((a, b) => a.hour - b.hour);
+  const step = Math.max(1, Math.floor(n / k));
+  const centroids: number[][] = [];
+  for (let i = 0; i < k; i++) {
+    const p = sortedByHour[Math.min(i * step, n - 1)];
+    centroids.push([...p.f]);
+  }
+
+  let assignments = new Array(n).fill(0);
+  let changed = true;
+  let iter = 0;
+  while (changed && iter < maxIter) {
+    changed = false;
+    // Assign
+    for (let i = 0; i < n; i++) {
+      let bestC = 0;
+      let bestD = Number.POSITIVE_INFINITY;
+      for (let c = 0; c < k; c++) {
+        const d =
+          (points[i].f[0] - centroids[c][0]) ** 2 +
+          (points[i].f[1] - centroids[c][1]) ** 2 +
+          (points[i].f[2] - centroids[c][2]) ** 2 +
+          (points[i].f[3] - centroids[c][3]) ** 2 +
+          (points[i].f[4] - centroids[c][4]) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          bestC = c;
+        }
+      }
+      if (assignments[i] !== bestC) {
+        assignments[i] = bestC;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+
+    // Update with weights favoring more-played cells
+    const sums = Array.from({ length: k }, () => [0, 0, 0, 0, 0]);
+    const weights = new Array(k).fill(0);
+    for (let i = 0; i < n; i++) {
+      const c = assignments[i];
+      const w = Math.max(1, points[i].total);
+      for (let j = 0; j < 5; j++) sums[c][j] += points[i].f[j] * w;
+      weights[c] += w;
+    }
+    for (let c = 0; c < k; c++) {
+      if (weights[c] > 0) {
+        for (let j = 0; j < 5; j++) centroids[c][j] = sums[c][j] / weights[c];
+      }
+    }
+    iter++;
+  }
+  // Inertia (sum of squared distances)
+  let inertia = 0;
+  for (let i = 0; i < n; i++) {
+    const c = assignments[i];
+    const d =
+      (points[i].f[0] - centroids[c][0]) ** 2 +
+      (points[i].f[1] - centroids[c][1]) ** 2 +
+      (points[i].f[2] - centroids[c][2]) ** 2 +
+      (points[i].f[3] - centroids[c][3]) ** 2 +
+      (points[i].f[4] - centroids[c][4]) ** 2;
+    inertia += d;
+  }
+  return { assignments, centroids, inertia };
+}
+
+const ClusterLegend = ({
+  centroidInfo,
+  colors,
+}: {
+  centroidInfo: any[];
+  colors: string[];
+}) => {
+  const getDayPeriod = (hour: number) => {
+    if (hour >= 0 && hour < 6) return "Early Morning";
+    if (hour >= 6 && hour < 12) return "Morning";
+    if (hour >= 12 && hour < 17) return "Afternoon";
+    if (hour >= 17 && hour < 21) return "Evening";
+    return "Night";
+  };
+
+  const getDayType = (dayIdx: number) => {
+    return dayIdx === 0 || dayIdx === 6 ? "Weekend" : "Weekday";
+  };
+
+  return (
+    <div className="mt-4 space-y-2">
+      <h4 className="font-semibold text-sm text-card-foreground">
+        Cluster Summary
+      </h4>
+      <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+        {centroidInfo.map((c) => (
+          <li key={c.cluster} className="flex items-start gap-3">
+            <div
+              className="w-3 h-3 rounded-full mt-1 shrink-0"
+              style={{ backgroundColor: colors[c.cluster % colors.length] }}
+            />
+            <div>
+              <span className="font-semibold text-card-foreground">
+                {c.label} ({getDayType(c.dayIdx)}{" "}
+                {getDayPeriod(c.hour).toLowerCase()})
+              </span>
+              <p className="text-muted-foreground">
+                Avg. Adj. WR:{" "}
+                <span
+                  className={c.meanWr >= 50 ? "text-green-600" : "text-red-600"}
+                >
+                  {c.meanWr.toFixed(1)}%
+                </span>{" "}
+                over ~{Math.round(c.total)} games.
+              </p>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+
+const TimeOfDayClusteringChart: React.FC<{
+  data: MatchHistoryData;
+  overallWinRate: number;
+  smoothingMethod: SmoothingMethods;
+  kValue: number;
+  clusters: number;
+  minGames: number;
+  wrWeight: number;
+}> = ({
+  data,
+  overallWinRate,
+  smoothingMethod,
+  kValue,
+  clusters,
+  minGames,
+  wrWeight,
+}) => {
+  const cellStats = useMemo(() => {
+    // Aggregate wins/total per day-hour
+    const stats = Array(7)
+      .fill(0)
+      .map(() =>
+        Array(24)
+          .fill(0)
+          .map(() => ({ wins: 0, total: 0 }))
+      );
+    data.forEach((g) => {
+      const d = new Date(g.timestamp);
+      const day = d.getDay();
+      const h = d.getHours();
+      stats[day][h].total++;
+      if (g.outcome === "Win") stats[day][h].wins++;
+    });
+    const points: ClusterPoint[] = [];
+    for (let day = 0; day < 7; day++) {
+      for (let hour = 0; hour < 24; hour++) {
+        const { wins, total } = stats[day][hour];
+        if (total === 0 || total < minGames) continue;
+        const wr = calculateSmoothedWinRate(
+          wins,
+          total,
+          overallWinRate,
+          smoothingMethod,
+          kValue
+        );
+        points.push({
+          dayIdx: day,
+          hour,
+          wr,
+          total,
+          f: buildFeatures(day, hour, wr, wrWeight),
+        });
+      }
+    }
+    return points;
+  }, [data, overallWinRate, smoothingMethod, kValue, minGames, wrWeight]);
+
+  const clustered = useMemo(() => {
+    if (cellStats.length === 0 || clusters < 1)
+      return {
+        points: [] as Array<ClusterPoint & { cluster: number }>,
+        centroids: [] as number[][],
+        inertia: 0,
+        silhouette: 0,
+      };
+    const K = Math.max(1, Math.min(clusters, Math.min(8, cellStats.length)));
+    const { assignments, centroids, inertia } = kmeans(cellStats, K);
+    const pointsWithCluster = cellStats.map((p, i) => ({
+      ...p,
+      cluster: assignments[i] ?? 0,
+    }));
+
+    // Silhouette score (approx, Euclidean in feature space)
+    const byCluster: Record<number, ClusterPoint[]> = {};
+    pointsWithCluster.forEach((p) => {
+      (byCluster[p.cluster] ||= []).push(p);
+    });
+    const dist = (a: ClusterPoint, b: ClusterPoint) =>
+      (a.f[0] - b.f[0]) ** 2 +
+      (a.f[1] - b.f[1]) ** 2 +
+      (a.f[2] - b.f[2]) ** 2 +
+      (a.f[3] - b.f[3]) ** 2 +
+      (a.f[4] - b.f[4]) ** 2;
+    let sSum = 0;
+    for (const p of pointsWithCluster) {
+      const same = byCluster[p.cluster];
+      // a: mean distance to same cluster (exclude self)
+      let a = 0;
+      if (same.length <= 1) {
+        a = 0;
+      } else {
+        let acc = 0;
+        for (const q of same) {
+          if (q === p) continue;
+          acc += dist(p, q);
+        }
+        a = acc / (same.length - 1);
+      }
+      // b: min mean distance to other clusters
+      let b = Number.POSITIVE_INFINITY;
+      for (const [cidStr, arr] of Object.entries(byCluster)) {
+        const cid = Number(cidStr);
+        if (cid === p.cluster) continue;
+        if (arr.length === 0) continue;
+        let acc = 0;
+        for (const q of arr) acc += dist(p, q);
+        const mean = acc / arr.length;
+        if (mean < b) b = mean;
+      }
+      const s = b === a ? 0 : (b - a) / Math.max(a, b);
+      sSum += s;
+    }
+    const silhouette = pointsWithCluster.length
+      ? sSum / pointsWithCluster.length
+      : 0;
+
+    return { points: pointsWithCluster, centroids, inertia, silhouette };
+  }, [cellStats, clusters]);
+
+  const colors = [
+    "hsl(var(--chart-1))",
+    "hsl(var(--chart-2))",
+    "hsl(var(--chart-3))",
+    "hsl(var(--chart-4))",
+    "hsl(var(--chart-5))",
+    "hsl(var(--primary))",
+    "hsl(var(--muted-foreground))",
+    "hsl(var(--accent))",
+  ];
+
+  const chartConfig: ChartConfig = {
+    C1: { label: "Cluster 1", color: colors[0] },
+    C2: { label: "Cluster 2", color: colors[1] },
+    C3: { label: "Cluster 3", color: colors[2] },
+    C4: { label: "Cluster 4", color: colors[3] },
+    C5: { label: "Cluster 5", color: colors[4] },
+    C6: { label: "Cluster 6", color: colors[5] },
+    C7: { label: "Cluster 7", color: colors[6] },
+    C8: { label: "Cluster 8", color: colors[7] },
+  };
+
+  if (clustered.points.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <p className="text-muted-foreground">
+          Not enough data to build clusters.
+        </p>
+      </div>
+    );
+  }
+
+  const series = Array.from(
+    { length: Math.min(clusters, colors.length) },
+    (_, c) => clustered.points.filter((p) => p.cluster === c)
+  );
+
+  // Compute human-readable centroids in time space using circular means
+  const centroidInfo = series.map((arr, idx) => {
+    let sDay = 0,
+      cDay = 0,
+      sHour = 0,
+      cHour = 0,
+      totalGames = 0,
+      wrSum = 0;
+    for (const p of arr) {
+      const w = Math.max(1, p.total);
+      const dayAng = (2 * Math.PI * p.dayIdx) / 7;
+      const hourAng = (2 * Math.PI * p.hour) / 24;
+      sDay += Math.sin(dayAng) * w;
+      cDay += Math.cos(dayAng) * w;
+      sHour += Math.sin(hourAng) * w;
+      cHour += Math.cos(hourAng) * w;
+      wrSum += p.wr * w;
+      totalGames += w;
+    }
+    const dayAng = Math.atan2(sDay, cDay);
+    const hourAng = Math.atan2(sHour, cHour);
+    const dayIdx =
+      ((Math.round(
+        (7 * (dayAng < 0 ? dayAng + 2 * Math.PI : dayAng)) / (2 * Math.PI)
+      ) %
+        7) +
+        7) %
+      7;
+    const hourFloat =
+      (24 * (hourAng < 0 ? hourAng + 2 * Math.PI : hourAng)) / (2 * Math.PI);
+    const hour = Math.round(hourFloat) % 24;
+    const meanWr = totalGames > 0 ? wrSum / totalGames : 0;
+    return {
+      cluster: idx,
+      dayIdx,
+      hour,
+      meanWr,
+      total: totalGames,
+      label: `C${idx + 1}`,
+    };
+  });
+
+  const yTicks = [0, 1, 2, 3, 4, 5, 6];
+
+  const ClusteringTooltip = ({ active, payload }: any) => {
+    if (!active || !payload || !payload.length) return null;
+    const payloadItem = payload[0].payload as any;
+    if (payloadItem.label) {
+      // centroid
+      return (
+        <div className="bg-white/80 backdrop-blur-sm p-2 border border-gray-200 rounded-md shadow-lg text-sm">
+          <p className="font-bold text-gray-800">
+            Centroid {payloadItem.label}
+          </p>
+          <p>
+            {dayShortLabels[payloadItem.dayIdx]} @ {payloadItem.hour}:00
+          </p>
+          <p>Mean Adj. WR: {payloadItem.meanWr.toFixed(1)}%</p>
+          <p>Weighted Games: {Math.round(payloadItem.total)}</p>
+        </div>
+      );
+    }
+    const p = payloadItem as ClusterPoint & { cluster: number };
+    return (
+      <div className="bg-white/80 backdrop-blur-sm p-2 border border-gray-200 rounded-md shadow-lg text-sm">
+        <p className="font-bold text-gray-800">
+          {dayShortLabels[p.dayIdx]} @ {p.hour}:00
+        </p>
+        <p>Adj. Win Rate: {p.wr.toFixed(1)}%</p>
+        <p>Games: {p.total}</p>
+        <p>Cluster: {p.cluster + 1}</p>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <ChartContainer config={chartConfig} className="w-full">
+        <ResponsiveContainer width="100%" height={380}>
+          <ScatterChart margin={{ top: 48, right: 20, bottom: 40, left: 10 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis
+              type="number"
+              dataKey="hour"
+              name="Hour"
+              domain={[-0.5, 23.5]}
+              ticks={[0, 3, 6, 9, 12, 15, 18, 21, 23]}
+              label={{
+                value: "Hour of Day",
+                position: "insideBottom",
+                offset: -10,
+              }}
+            />
+            <YAxis
+              type="number"
+              dataKey="dayIdx"
+              name="Day"
+              domain={[-0.3, 6.3]}
+              ticks={yTicks}
+              tickFormatter={(v) => dayShortLabels[v]}
+              label={{
+                value: "Day of Week",
+                angle: -90,
+                position: "insideLeft",
+              }}
+            />
+            <ZAxis
+              type="number"
+              dataKey="total"
+              range={[60, 400]}
+              name="Games"
+            />
+            <Tooltip
+              content={<ClusteringTooltip />}
+              cursor={{ strokeDasharray: "3 3" }}
+            />
+            {series.map((s, idx) => (
+              <Scatter
+                key={idx}
+                name={`Cluster ${idx + 1}`}
+                data={s}
+                // MODIFICATION: No longer need the modulo fallback since ChartContainer provides colors
+                fill={colors[idx]}
+              />
+            ))}
+            <Scatter
+              name="Centroids"
+              data={centroidInfo}
+              // MODIFICATION: Use a direct color that stands out
+              fill="black"
+              stroke="white"
+            >
+              <LabelList dataKey="label" position="top" offset={8} />
+            </Scatter>
+          </ScatterChart>
+        </ResponsiveContainer>
+      </ChartContainer>
+
+      {/* MODIFICATION: Add the new legend and metrics footer */}
+      <div className="mt-2 px-4">
+        <ClusterLegend centroidInfo={centroidInfo} colors={colors} />
+        <div className="text-xs text-muted-foreground mt-4 border-t pt-2">
+          <span>Avg silhouette: {clustered.silhouette.toFixed(2)}</span>
+          <span className="mx-2">•</span>
+          <span>Inertia: {clustered.inertia.toFixed(1)}</span>
+          <span className="mx-2">•</span>
+          <span>Points: {clustered.points.length}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const smoothingMethodInfo: Record<
   SmoothingMethods,
   { label: string; description: string; formula: string }
@@ -1059,7 +1560,7 @@ interface DashboardProps {
   data: MatchHistoryResponse;
 }
 
-export default function Dashboard({ data }: DashboardProps) {
+function Dashboard({ data }: DashboardProps) {
   const matches: MatchHistoryData = useMemo(
     () => (data.data ? data.data.flat() : []),
     [data]
@@ -1067,10 +1568,16 @@ export default function Dashboard({ data }: DashboardProps) {
 
   const [roleFilter, setRoleFilter] = useState("ALL");
   const [championFilter, setChampionFilter] = useState("ALL");
+  const [dateRange, setDateRange] = React.useState<DateRange | undefined>(
+    undefined
+  );
   const [smoothingMethod, setSmoothingMethod] =
     useState<SmoothingMethods>("none");
   const [kValue, setKValue] = useState(5);
   const [rollingWindow, setRollingWindow] = useState(15);
+  const [clusterCount, setClusterCount] = useState(4);
+  const [minClusterGames, setMinClusterGames] = useState(2);
+  const [wrInfluence, setWrInfluence] = useState(1);
 
   const championOptions = useMemo(
     () => [
@@ -1095,12 +1602,32 @@ export default function Dashboard({ data }: DashboardProps) {
   );
 
   const filteredData = useMemo(() => {
-    return matches.filter(
-      (game) =>
-        (roleFilter === "ALL" || game.role === roleFilter) &&
-        (championFilter === "ALL" || game.champion === championFilter)
-    );
-  }, [matches, roleFilter, championFilter]);
+    return matches.filter((game) => {
+      const roleMatch = roleFilter === "ALL" || game.role === roleFilter;
+      const championMatch =
+        championFilter === "ALL" || game.champion === championFilter;
+
+      if (!dateRange?.from) {
+        // No date filter applied
+        return roleMatch && championMatch;
+      }
+
+      // At least a 'from' date is selected
+      const gameTime = game.timestamp;
+
+      // Adjust to start of the 'from' day
+      const fromTime = new Date(dateRange.from).setHours(0, 0, 0, 0);
+
+      // If 'to' is not selected, use the end of the 'from' day for a single-day range
+      const toTime = (
+        dateRange.to ? new Date(dateRange.to) : new Date(dateRange.from)
+      ).setHours(23, 59, 59, 999);
+
+      const dateMatch = gameTime >= fromTime && gameTime <= toTime;
+
+      return roleMatch && championMatch && dateMatch;
+    });
+  }, [matches, roleFilter, championFilter, dateRange]);
 
   const { totalGames, winRate, overallWinRateDecimal } = useMemo(() => {
     if (!filteredData.length)
@@ -1117,53 +1644,73 @@ export default function Dashboard({ data }: DashboardProps) {
   return (
     <TooltipProvider>
       <div className="w-full max-w-6xl mx-auto p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <header className="lg:col-span-4">
-          <h1 className="text-3xl font-bold">Performance Analysis</h1>
-          <p className="text-muted-foreground">
-            An analytical look at your recent performance.
-          </p>
-        </header>
-
         <Card className="lg:col-span-4">
           <CardHeader>
             <CardTitle>Analysis Filters</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col md:flex-row gap-4 items-start">
-            <Select onValueChange={setRoleFilter} defaultValue="ALL">
-              <SelectTrigger className="w-full md:w-[200px]">
-                <SelectValue placeholder="Filter by Role" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectLabel>Roles</SelectLabel>
-                  {roleOptions.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Select onValueChange={setChampionFilter} defaultValue="ALL">
-              <SelectTrigger className="w-full md:w-[200px]">
-                <SelectValue placeholder="Filter by Champion" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectLabel>Champions</SelectLabel>
-                  {championOptions.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <div className="relative w-full md:w-auto">
+          <CardContent className="flex flex-col md:flex-row gap-4 items-end">
+            {/* Role Filter */}
+            <div className="w-full md:w-auto flex flex-col gap-1.5">
+              <Label>Role</Label>
+              <Select onValueChange={setRoleFilter} defaultValue="ALL">
+                <SelectTrigger className="w-full md:w-[200px]">
+                  <SelectValue placeholder="Filter by Role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectLabel>Roles</SelectLabel>
+                    {roleOptions.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+            {/* Champion Filter */}
+            <div className="w-full md:w-auto flex flex-col gap-1.5">
+              <Label>Champion</Label>
+              <Select onValueChange={setChampionFilter} defaultValue="ALL">
+                <SelectTrigger className="w-full md:w-[200px]">
+                  <SelectValue placeholder="Filter by Champion" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectLabel>Champions</SelectLabel>
+                    {championOptions.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+            {/* Smoothing Method Filter */}
+            <div className="w-full md:w-auto flex flex-col gap-1.5 relative">
               {smoothingMethod === "bayesian" && (
                 <div className="absolute bottom-full mb-2 w-full md:w-[200px] space-y-2">
                   <div className="flex justify-between items-center">
-                    <Label htmlFor="k-slider">Adjustment Strength (k)</Label>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="k-slider">Adjustment Strength (k)</Label>
+                      <ShadcnTooltip delayDuration={100}>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px] text-muted-foreground cursor-help">
+                            i
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          side="top"
+                          align="start"
+                          className="max-w-xs"
+                        >
+                          Higher k pulls small-sample win rates toward your
+                          overall average more strongly. Use larger k for more
+                          conservative estimates.
+                        </TooltipContent>
+                      </ShadcnTooltip>
+                    </div>
                     <span className="text-sm font-medium text-muted-foreground">
                       {kValue}
                     </span>
@@ -1178,6 +1725,7 @@ export default function Dashboard({ data }: DashboardProps) {
                   />
                 </div>
               )}
+              <Label>Adjustment Formula</Label>
               <Select
                 onValueChange={(value: SmoothingMethods) =>
                   setSmoothingMethod(value)
@@ -1213,6 +1761,44 @@ export default function Dashboard({ data }: DashboardProps) {
                   </SelectGroup>
                 </SelectContent>
               </Select>
+            </div>
+            {/* Date Range Picker */}
+            <div className="w-full md:w-auto flex flex-col gap-1.5">
+              <Label htmlFor="dates">Date Range</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    id="dates"
+                    className="w-full md:w-[240px] justify-between text-left font-normal"
+                  >
+                    {dateRange?.from ? (
+                      dateRange.to ? (
+                        <>
+                          {dateRange.from.toLocaleDateString()} -{" "}
+                          {dateRange.to.toLocaleDateString()}
+                        </>
+                      ) : (
+                        dateRange.from.toLocaleDateString()
+                      )
+                    ) : (
+                      "Select date range"
+                    )}
+                    <ChevronDownIcon className="ml-2 h-4 w-4" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  className="w-auto overflow-hidden p-0"
+                  align="start"
+                >
+                  <Calendar
+                    mode="range"
+                    selected={dateRange}
+                    onSelect={setDateRange}
+                    captionLayout="dropdown"
+                  />
+                </PopoverContent>
+              </Popover>
             </div>
           </CardContent>
         </Card>
@@ -1322,6 +1908,176 @@ export default function Dashboard({ data }: DashboardProps) {
           </CardContent>
         </Card>
 
+        {/* Clustering visualization card */}
+        <Card className="lg:col-span-4">
+          <CardHeader>
+            <div className="flex justify-between items-center flex-wrap gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <CardTitle>Time-of-Day Clusters</CardTitle>
+                  <ShadcnTooltip delayDuration={100}>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px] text-muted-foreground cursor-help">
+                        i
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="top"
+                      align="start"
+                      className="max-w-sm"
+                    >
+                      <div className="space-y-1 text-xs">
+                        <p>
+                          Each dot is a (day × hour) time slot. X = hour, Y =
+                          day. Size = games played. Color = cluster group.
+                        </p>
+                        <p>
+                          Clusters are learned using cyclical features for time
+                          and your adjusted win rate (scaled by the Win rate
+                          influence control).
+                        </p>
+                        <p>
+                          Centroids (C1, C2, …) summarize the typical day/hour
+                          and mean adjusted WR for each cluster.
+                        </p>
+                        <p>
+                          Use the controls to tune granularity (k), filter noise
+                          (min games), and emphasize performance (WR influence).
+                          Metrics show quality (silhouette) and tightness
+                          (inertia).
+                        </p>
+                      </div>
+                    </TooltipContent>
+                  </ShadcnTooltip>
+                </div>
+                <CardDescription>
+                  K-means clusters over day/hour cells sized by games and
+                  colored by cluster.
+                </CardDescription>
+              </div>
+              <div className="flex gap-6 flex-wrap">
+                <div className="w-48 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="cluster-slider" className="text-xs">
+                        Clusters (k)
+                      </Label>
+                      <ShadcnTooltip delayDuration={100}>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border text-[9px] text-muted-foreground cursor-help">
+                            i
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          side="top"
+                          align="start"
+                          className="max-w-xs"
+                        >
+                          How many groups K-means should find. Lower k = broader
+                          patterns; higher k = finer, smaller clusters.
+                        </TooltipContent>
+                      </ShadcnTooltip>
+                    </div>
+                    <span className="text-sm font-medium text-muted-foreground">
+                      {clusterCount}
+                    </span>
+                  </div>
+                  <Slider
+                    id="cluster-slider"
+                    min={2}
+                    max={8}
+                    step={1}
+                    value={[clusterCount]}
+                    onValueChange={(v) => setClusterCount(v[0])}
+                  />
+                </div>
+                <div className="w-56 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="min-games-slider" className="text-xs">
+                        Min games per cell
+                      </Label>
+                      <ShadcnTooltip delayDuration={100}>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border text-[9px] text-muted-foreground cursor-help">
+                            i
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          side="top"
+                          align="start"
+                          className="max-w-xs"
+                        >
+                          Filters out time slots with fewer than this many games
+                          before clustering to reduce small-sample noise.
+                        </TooltipContent>
+                      </ShadcnTooltip>
+                    </div>
+                    <span className="text-sm font-medium text-muted-foreground">
+                      {minClusterGames}
+                    </span>
+                  </div>
+                  <Slider
+                    id="min-games-slider"
+                    min={1}
+                    max={10}
+                    step={1}
+                    value={[minClusterGames]}
+                    onValueChange={(v) => setMinClusterGames(v[0])}
+                  />
+                </div>
+                <div className="w-56 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="wr-weight-slider" className="text-xs">
+                        Win rate influence
+                      </Label>
+                      <ShadcnTooltip delayDuration={100}>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border text-[9px] text-muted-foreground cursor-help">
+                            i
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          side="top"
+                          align="start"
+                          className="max-w-xs"
+                        >
+                          Scales the adjusted win rate feature in clustering. 0×
+                          uses only time patterns; higher values emphasize
+                          performance differences.
+                        </TooltipContent>
+                      </ShadcnTooltip>
+                    </div>
+                    <span className="text-sm font-medium text-muted-foreground">
+                      {wrInfluence.toFixed(1)}x
+                    </span>
+                  </div>
+                  <Slider
+                    id="wr-weight-slider"
+                    min={0}
+                    max={3}
+                    step={0.5}
+                    value={[wrInfluence]}
+                    onValueChange={(v) => setWrInfluence(v[0])}
+                  />
+                </div>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <TimeOfDayClusteringChart
+              data={filteredData}
+              overallWinRate={overallWinRateDecimal}
+              smoothingMethod={smoothingMethod}
+              kValue={kValue}
+              clusters={clusterCount}
+              minGames={minClusterGames}
+              wrWeight={wrInfluence}
+            />
+          </CardContent>
+        </Card>
+
         {/* This card is for the Rolling Trend */}
         <Card className="lg:col-span-4">
           <CardHeader>
@@ -1334,9 +2090,27 @@ export default function Dashboard({ data }: DashboardProps) {
               </div>
               <div className="w-48 space-y-2">
                 <div className="flex justify-between items-center">
-                  <Label htmlFor="window-slider" className="text-xs">
-                    Window Size
-                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="window-slider" className="text-xs">
+                      Window Size
+                    </Label>
+                    <ShadcnTooltip delayDuration={100}>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border text-[9px] text-muted-foreground cursor-help">
+                          i
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="top"
+                        align="start"
+                        className="max-w-xs"
+                      >
+                        Number of games per rolling window when computing the
+                        trend. Larger windows smooth noise but react more
+                        slowly.
+                      </TooltipContent>
+                    </ShadcnTooltip>
+                  </div>
                   <span className="text-sm font-medium text-muted-foreground">
                     {rollingWindow}
                   </span>
@@ -1396,3 +2170,5 @@ export default function Dashboard({ data }: DashboardProps) {
     </TooltipProvider>
   );
 }
+
+export default React.memo(Dashboard);

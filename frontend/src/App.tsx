@@ -271,6 +271,12 @@ function App() {
       <header>
         <div className="container mx-auto p-4 pt-8">
           <div className="mx-auto max-w-3xl">
+            <header className="lg:col-span-4 text-center pb-2">
+              <h1 className="text-3xl font-bold">Performance Analysis</h1>
+              <p className="text-muted-foreground">
+                An analytical look at your recent performance.
+              </p>
+            </header>
             <PlayerHistoryForm
               onSearch={handleSearch}
               onUpdate={triggerUpdate}

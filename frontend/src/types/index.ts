@@ -6,6 +6,7 @@ export type FormData = {
 
 export interface MatchData {
   match_id: string;
+  // Unix epoch in milliseconds
   timestamp: number;
   outcome: "Win" | "Loss";
   champion: string;

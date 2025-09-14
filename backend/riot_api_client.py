@@ -4,6 +4,24 @@ import config  # Import our new config file
 
 HEADERS = {"X-Riot-Token": config.RIOT_API_KEY}
 
+REGION_TO_ROUTE_MAP = {
+    "na": "americas",
+    "euw": "europe",
+    "eune": "europe",
+    "kr": "asia",
+    "br": "americas",
+}
+
+
+def get_regional_route(region: str) -> str:
+    """
+    Converts a simple region string (e.g., 'na') to its regional route.
+    Raises PlayerNotFound if the region is not supported.
+    """
+    route = REGION_TO_ROUTE_MAP.get(region.lower())
+    if not route:
+        raise PlayerNotFound(f"Invalid or unsupported region: '{region}'")
+    return route
 
 class PlayerNotFound(Exception):
     """Custom exception for when a player's PUUID can't be found."""
@@ -12,10 +30,11 @@ class PlayerNotFound(Exception):
 
 
 async def get_puuid(
-    client: httpx.AsyncClient, game_name: str, tag_line: str, region: str = "europe"
+    client: httpx.AsyncClient, game_name: str, tag_line: str, platform_id: str
 ) -> str:
     """Fetches a player's PUUID. Raises PlayerNotFound on 404."""
-    url = f"https://{region}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}"
+    regional_route = get_regional_route(platform_id)
+    url = f"https://{regional_route}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}"
     try:
         response = await client.get(url, headers=HEADERS)
         response.raise_for_status()
@@ -34,10 +53,11 @@ async def get_match_ids_async(
     puuid: str,
     count: int,
     start_index: int,
-    region: str = "europe",
+    platform_id: str,
 ) -> list | None:
     """Asynchronously fetches a list of match IDs."""
-    url = f"https://{region}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?queue=420&start={start_index}&count={count}"
+    regional_route = get_regional_route(platform_id)
+    url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?queue=420&start={start_index}&count={count}"
     try:
         response = await client.get(url, headers=HEADERS)
         response.raise_for_status()
@@ -48,10 +68,11 @@ async def get_match_ids_async(
 
 
 async def get_match_details_async(
-    client: httpx.AsyncClient, match_id: str, puuid: str, region: str = "europe"
+    client: httpx.AsyncClient, match_id: str, puuid: str, platform_id: str
 ) -> dict | None:
     """Asynchronously fetches detailed information for a single match."""
-    url = f"https://{region}.api.riotgames.com/lol/match/v5/matches/{match_id}"
+    regional_route = get_regional_route(platform_id)
+    url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{match_id}"
     try:
         response = await client.get(url, headers=HEADERS)
         response.raise_for_status()

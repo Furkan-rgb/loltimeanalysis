@@ -14,7 +14,7 @@ async def dispatch_fetch_job(ctx, game_name: str, tag_line: str, region: str):
     This is the main entry point. It fetches the list of match IDs and "fans-out"
     a separate job for each individual match.
     """
-    player_id = f"{game_name.lower()}#{tag_line.lower()}"
+    player_id = f"{game_name.lower()}#{tag_line.lower()}@{region.lower()}"
     job_key_prefix = f"job:{player_id}"
     lock_key = f"lock:{player_id}"
 
@@ -48,6 +48,7 @@ async def dispatch_fetch_job(ctx, game_name: str, tag_line: str, region: str):
 
             if not all_match_ids:
                 print(f"[{player_id}] DISPATCHER: No matches found. Job complete.")
+                # Ensure the lock is released so the user can try again later.
                 redis_service.release_lock(lock_key)
                 return
 
@@ -83,7 +84,23 @@ async def dispatch_fetch_job(ctx, game_name: str, tag_line: str, region: str):
                     partial_results_key,
                     player_id,
                 )
+            # STEP 3: Enqueue the final trigger task.
+            # This will run after all fetchers and check if aggregation is ready.
+            print(f"[{player_id}] DISPATCHER: Enqueuing final trigger task.")
+            await arq_pool.enqueue_job(
+                "trigger_aggregation_if_needed_task",
+                aggregation_key,
+                partial_results_key,
+                player_id,
+            )
 
+    except riot_api_client.PlayerNotFound as e:  # <-- Catch the specific error
+        error_key = f"{job_key_prefix}:error"
+        print(f"[{player_id}] DISPATCHER: Player not found. Signaling error.")
+        # Set a temporary key in Redis with the error message
+        redis_service.redis_client.set(error_key, str(e), ex=60)
+        redis_service.release_lock(lock_key)
+        
     except Exception as e:
         print(f"[{player_id}] DISPATCHER: FAILED with error: {e}")
         redis_service.release_lock(lock_key)
@@ -160,7 +177,38 @@ async def fetch_match_details_task(
             )
 
 
-# --- TASK 3: The Aggregator ---
+# --- TASK 3: The Aggregation Trigger ---
+async def trigger_aggregation_if_needed_task(
+    ctx, aggregation_key: str, partial_results_key: str, player_id: str
+):
+    """
+    Checks if all fetcher tasks are complete and, if so, triggers the final
+    aggregation. This prevents a race condition where aggregation runs too early.
+    """
+    # hgetall is atomic, so we get a consistent snapshot.
+    agg_data = redis_service.redis_client.hgetall(aggregation_key)
+    total_count = int(agg_data.get(b"total", 0))
+    processed_count = int(agg_data.get(b"processed", 0))
+
+    print(
+        f"[{player_id}] TRIGGER: Checking status. "
+        f"Processed: {processed_count}, Total: {total_count}"
+    )
+
+    if total_count > 0 and processed_count >= total_count:
+        print(f"[{player_id}] TRIGGER: All tasks complete. Enqueuing aggregation.")
+        arq_pool = ctx["redis"]
+        await arq_pool.enqueue_job(
+            "aggregate_results_task",
+            aggregation_key,
+            partial_results_key,
+            player_id,
+        )
+    else:
+        print(f"[{player_id}] TRIGGER: Work not yet complete. Will not aggregate.")
+
+
+# --- TASK 3.5: The Aggregator ---
 async def aggregate_results_task(
     ctx, aggregation_key: str, partial_results_key: str, player_id: str
 ):

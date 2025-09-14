@@ -60,7 +60,7 @@ app = FastAPI(lifespan=lifespan)
 # --- MIDDLEWARE ---
 
 # Allow frontend requests from localhost
-origins = ["http://localhost", "http://localhost:8080", "null"]
+origins = ["http://localhost", "http://localhost:8080", "http://localhost:5173"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -70,13 +70,13 @@ app.add_middleware(
 )
 
 
-@app.get("/history/{game_name}/{tag_line}")
-def get_history(game_name: str, tag_line: str):
+@app.get("/history/{game_name}/{tag_line}/{region}")
+def get_history(game_name: str, tag_line: str, region: str):
     """
     Retrieves a player's match history directly from the cache.
     This is a simple, non-blocking read operation.
     """
-    player_id = f"{game_name.lower()}#{tag_line.lower()}"
+    player_id = f"{game_name.lower()}#{tag_line.lower()}@{region.lower()}"
     cache_key = f"cache:{player_id}"
 
     if cached_data := redis_service.get_from_cache(cache_key):
@@ -90,13 +90,13 @@ def get_history(game_name: str, tag_line: str):
     )
 
 
-@app.post("/update/{game_name}/{tag_line}")
-async def trigger_update_job(game_name: str, tag_line: str, region: str = "europe"):
+@app.post("/update/{game_name}/{tag_line}/{region}")
+async def trigger_update_job(game_name: str, tag_line: str, region: str):
     """
     Triggers a background job to fetch or update a player's match history.
     This is a non-blocking action endpoint.
     """
-    player_id = f"{game_name.lower()}#{tag_line.lower()}"
+    player_id = f"{game_name.lower()}#{tag_line.lower()}@{region.lower()}"
     cooldown_key = f"cooldown:{player_id}"
     lock_key = f"lock:{player_id}"
 
@@ -118,36 +118,48 @@ async def trigger_update_job(game_name: str, tag_line: str, region: str = "europ
     return {"status": "started"}
 
 
-@app.get("/stream-status/{game_name}/{tag_line}")
-async def stream_status(game_name: str, tag_line: str):
+@app.get("/stream-status/{game_name}/{tag_line}/{region}")
+async def stream_status(game_name: str, tag_line: str, region: str):
     """
     Streams status updates using Server-Sent Events (SSE).
     This keeps a connection open and pushes data as the job progresses.
     """
-    player_id = f"{game_name.lower()}#{tag_line.lower()}"
+    player_id = f"{game_name.lower()}#{tag_line.lower()}@{region.lower()}"
 
     async def event_generator():
         """Yields status updates as SSE messages."""
         last_status = None
         while True:
-            # --- The logic to check Redis is the same as before ---
+            # --- Define all keys used for status checking ---
             lock_key = f"lock:{player_id}"
             aggregation_key = f"job:{player_id}:agg"
             cache_key = f"cache:{player_id}"
+            error_key = f"job:{player_id}:error"  # Key for specific error messages
 
             current_status = {}
-            status_data = redis_service.redis_client.hgetall(aggregation_key)
 
-            if status_data:
+            # 1. Check for a specific error message first
+            if error_message := redis_service.redis_client.get(error_key):
+                current_status = {"status": "error", "message": error_message}
+                redis_service.redis_client.delete(error_key)  # Clean up after reading
+
+            # 2. Check for progress data from the aggregation key
+            elif status_data := redis_service.redis_client.hgetall(aggregation_key):
                 current_status = {
                     "status": "progress",
                     "processed": int(status_data.get("processed", 0)),
                     "total": int(status_data.get("total", 1)),
                 }
+            
+            # 3. Check if the job is running (lock exists) but progress hasn't started
             elif redis_service.redis_client.exists(lock_key):
                 current_status = {"status": "progress", "processed": 0, "total": 100}
+            
+            # 4. Check if the job is successfully completed (cache exists)
             elif redis_service.redis_client.exists(cache_key):
                 current_status = {"status": "ready"}
+            
+            # 5. Otherwise, the job is not running and there's no data
             else:
                 current_status = {"status": "idle_no_data"}
 
@@ -156,14 +168,13 @@ async def stream_status(game_name: str, tag_line: str):
                 yield f"data: {json.dumps(current_status)}\n\n"
                 last_status = current_status
 
-            # If the job is done or not found, close the stream
-            if current_status["status"] in ["ready", "idle_no_data"]:
+            # --- If the job is done, errored, or not running, close the stream ---
+            if current_status["status"] in ["ready", "idle_no_data", "error"]:
                 break
 
             await asyncio.sleep(1)  # Check for updates every second
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-
 
 # --- LOCAL DEVELOPMENT RUNNER ---
 if __name__ == "__main__":

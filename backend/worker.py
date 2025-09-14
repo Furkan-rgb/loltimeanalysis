@@ -5,7 +5,12 @@ from watchfiles import run_process
 
 import config
 
-from tasks import dispatch_fetch_job, fetch_match_details_task, aggregate_results_task
+from tasks import (
+    dispatch_fetch_job,
+    fetch_match_details_task,
+    aggregate_results_task,
+    trigger_aggregation_if_needed_task,
+)
 
 
 class WorkerSettings:
@@ -14,7 +19,12 @@ class WorkerSettings:
     This is where we list all the tasks it's allowed to execute.
     """
 
-    functions = [dispatch_fetch_job, fetch_match_details_task, aggregate_results_task]
+    functions = [
+        dispatch_fetch_job,
+        fetch_match_details_task,
+        aggregate_results_task,
+        trigger_aggregation_if_needed_task,
+    ]
     redis_settings = arq.connections.RedisSettings(
         host=config.REDIS_HOST, port=config.REDIS_PORT
     )

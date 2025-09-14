@@ -1,7 +1,16 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { MatchHistoryResponse, MatchHistoryData } from "@/types";
 import { ChevronDownIcon } from "lucide-react";
 import { type DateRange } from "react-day-picker";
+import {
+  startOfYear,
+  endOfYear,
+  startOfWeek,
+  endOfWeek,
+  eachDayOfInterval,
+  getYear,
+  format,
+} from "date-fns";
 import {
   ResponsiveContainer,
   PieChart,
@@ -302,6 +311,237 @@ const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
         {/* Legend removed */}
       </PieChart>
     </ChartContainer>
+  );
+};
+
+// Yearly calendar heatmap showing daily winrate for a selected year
+const YearlyWinrateHeatmap: React.FC<{
+  data: MatchHistoryData;
+  overallWinRate: number; // decimal 0..1
+  smoothingMethod: SmoothingMethods;
+  kValue: number;
+}> = ({ data, overallWinRate, smoothingMethod, kValue }) => {
+  // Measure available width to size cells and use the full row width
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  useEffect(() => {
+    if (!gridRef.current) return;
+    const el = gridRef.current;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const cr = entry.contentRect;
+        setContainerWidth(Math.floor(cr.width));
+      }
+    });
+    ro.observe(el);
+    // Initial size
+    setContainerWidth(Math.floor(el.getBoundingClientRect().width));
+    return () => ro.disconnect();
+  }, []);
+
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    for (const g of data) years.add(getYear(new Date(g.timestamp)));
+    return Array.from(years).sort((a, b) => a - b);
+  }, [data]);
+
+  const defaultYear = useMemo(() => {
+    if (availableYears.length > 0)
+      return availableYears[availableYears.length - 1];
+    return getYear(new Date());
+  }, [availableYears]);
+
+  const [year, setYear] = useState<number>(defaultYear);
+
+  // Build per-day aggregates for the selected year
+  const { weeks, monthLabels } = useMemo(() => {
+    const yStart = startOfYear(new Date(year, 0, 1));
+    const yEnd = endOfYear(new Date(year, 0, 1));
+    const start = startOfWeek(yStart, { weekStartsOn: 1 }); // Monday-first
+    const end = endOfWeek(yEnd, { weekStartsOn: 1 });
+    const days = eachDayOfInterval({ start, end });
+
+    const byDay: Record<string, { wins: number; total: number }> = {};
+    for (const g of data) {
+      const d = new Date(g.timestamp);
+      if (getYear(d) !== year) continue;
+      const key = format(d, "yyyy-MM-dd");
+      if (!byDay[key]) byDay[key] = { wins: 0, total: 0 };
+      byDay[key].total += 1;
+      if (g.outcome === "Win") byDay[key].wins += 1;
+    }
+
+    // Group into columns (weeks)
+    const weeks: Array<
+      Array<{
+        date: Date;
+        key: string;
+        wins: number;
+        total: number;
+        wr: number; // adjusted
+      } | null>
+    > = [];
+
+    // Month labels per week column (based on first day of week inside the selected year)
+    const monthLabels: Array<{ col: number; label: string }> = [];
+    let lastMonth = "";
+
+    for (let i = 0; i < days.length; i += 7) {
+      const weekSlice = days.slice(i, i + 7);
+      const col = weeks.length;
+      const colItems: Array<any> = new Array(7).fill(null);
+      weekSlice.forEach((d, idx) => {
+        const key = format(d, "yyyy-MM-dd");
+        const agg = byDay[key] || { wins: 0, total: 0 };
+        const wr = calculateSmoothedWinRate(
+          agg.wins,
+          agg.total,
+          overallWinRate,
+          smoothingMethod,
+          kValue
+        );
+        colItems[idx] = { date: d, key, wins: agg.wins, total: agg.total, wr };
+      });
+      weeks.push(colItems);
+
+      // Determine label: show when month changes compared to previous column
+      // Use the first day of the week that falls within the selected year
+      const firstInYear =
+        weekSlice.find((d) => getYear(d) === year) || weekSlice[0];
+      const label = format(firstInYear, "MMM");
+      if (label !== lastMonth) {
+        monthLabels.push({ col, label });
+        lastMonth = label;
+      }
+    }
+
+    return { weeks, monthLabels };
+  }, [data, year, overallWinRate, smoothingMethod, kValue]);
+
+  const yearsToShow = availableYears.length > 0 ? availableYears : [year];
+
+  // Cell size and spacing similar to GitHub contribution graph
+  const cellGap = 2;
+  const cellSize = useMemo(() => {
+    if (containerWidth <= 0 || weeks.length === 0) return 12;
+    const totalGap = (weeks.length - 1) * cellGap;
+    const available = Math.max(0, containerWidth - totalGap);
+    const size = Math.floor(available / weeks.length);
+    // Keep a sensible minimum for visibility; no upper cap so it fills width
+    return Math.max(8, size);
+  }, [containerWidth, weeks.length]);
+
+  return (
+    <div className="w-full">
+      <div className="flex items-start gap-4">
+        {/* Sidebar day labels */}
+        <div className="w-10 flex flex-col text-[10px] text-muted-foreground leading-[12px] mt-6">
+          {Array.from({ length: 7 }, (_, i) => i).map((i) => (
+            <div
+              key={i}
+              className="flex items-center justify-end pr-1"
+              style={{ height: cellSize + cellGap }}
+            >
+              {/* Show only Mon, Wed, Fri to reduce clutter */}
+              {i === 0 ? "Mon" : i === 2 ? "Wed" : i === 4 ? "Fri" : ""}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex-1" ref={gridRef}>
+          {/* Month labels row */}
+          <div className="flex text-xs text-muted-foreground mb-1">
+            {weeks.map((_, colIdx) => {
+              const m = monthLabels.find((ml) => ml.col === colIdx);
+              return (
+                <div
+                  key={colIdx}
+                  className="text-left"
+                  style={{
+                    width: cellSize,
+                    marginRight: colIdx === weeks.length - 1 ? 0 : cellGap,
+                  }}
+                >
+                  {m ? m.label : ""}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Grid */}
+          <div className="flex">
+            {weeks.map((week, colIdx) => (
+              <div
+                key={colIdx}
+                className="flex flex-col"
+                style={{
+                  marginRight: colIdx === weeks.length - 1 ? 0 : cellGap,
+                }}
+              >
+                {week.map((cell, rowIdx) => {
+                  const tooltipText = cell
+                    ? cell.total > 0
+                      ? `${format(
+                          cell.date,
+                          "MMM d, yyyy"
+                        )} — ${cell.wr.toFixed(0)}% (${cell.wins}W/${
+                          cell.total - cell.wins
+                        }L)`
+                      : `${format(cell.date, "MMM d, yyyy")} — No games`
+                    : "";
+                  return (
+                    <div
+                      key={rowIdx}
+                      className={`rounded-sm ${
+                        cell
+                          ? getHeatmapColor(cell.wr, cell.total)
+                          : "bg-transparent"
+                      }`}
+                      title={tooltipText}
+                      style={{
+                        width: cellSize,
+                        height: cellSize,
+                        marginBottom: cellGap,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+
+          {/* Legend */}
+          <div className="flex items-center gap-2 mt-3 text-xs text-muted-foreground">
+            <span>Lower</span>
+            <div className="w-3 h-3 rounded-sm bg-red-500" />
+            <div className="w-3 h-3 rounded-sm bg-red-400" />
+            <div className="w-3 h-3 rounded-sm bg-yellow-300" />
+            <div className="w-3 h-3 rounded-sm bg-green-400" />
+            <div className="w-3 h-3 rounded-sm bg-green-500" />
+            <span>Higher</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Year Selector */}
+      <div className="mt-4 flex items-center gap-2">
+        <Label className="text-xs">Year</Label>
+        <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
+          <SelectTrigger className="w-28 h-8">
+            <SelectValue placeholder="Year" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {yearsToShow.map((y) => (
+                <SelectItem key={y} value={String(y)}>
+                  {y}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
   );
 };
 
@@ -2464,6 +2704,23 @@ function Dashboard({ data }: DashboardProps) {
           </CardHeader>
           <CardContent>
             <TimeOfDayHeatmap
+              data={filteredData}
+              overallWinRate={overallWinRateDecimal}
+              smoothingMethod={smoothingMethod as SmoothingMethods}
+              kValue={kValue}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-4">
+          <CardHeader>
+            <CardTitle>Yearly Win Rate Calendar</CardTitle>
+            <CardDescription>
+              Daily adjusted win rate for a selected year. One cell per day.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <YearlyWinrateHeatmap
               data={filteredData}
               overallWinRate={overallWinRateDecimal}
               smoothingMethod={smoothingMethod as SmoothingMethods}

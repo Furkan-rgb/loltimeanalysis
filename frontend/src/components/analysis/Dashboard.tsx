@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import type { MatchHistoryResponse, MatchHistoryData } from "@/types";
 import { ChevronDownIcon } from "lucide-react";
 import { type DateRange } from "react-day-picker";
@@ -20,8 +20,10 @@ import {
   Scatter,
   ZAxis,
   ReferenceLine,
+  ReferenceDot,
   Treemap,
   Label as RechartsLabel,
+  ReferenceArea,
 } from "recharts";
 
 // UI Components from your project
@@ -44,7 +46,6 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -303,6 +304,7 @@ const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
     </ChartContainer>
   );
 };
+
 const DailyWinRateChart: React.FC<{
   data: MatchHistoryData;
   overallWinRate: number;
@@ -463,16 +465,31 @@ const KeyInsights: React.FC<{
   smoothingMethod: SmoothingMethods;
   kValue: number;
 }> = ({ data, overallWinRate, smoothingMethod, kValue }) => {
-  const insights = useMemo(() => {
+  const { insights, summaryDetails } = useMemo<{
+    insights: string[];
+    summaryDetails: {
+      comfortPicks: string[];
+      hiddenGems: string[];
+      theGrind: string[];
+    } | null;
+  }>(() => {
     // --- 1. Increased Statistical Rigor ---
     const MIN_GAMES_CHAMPION = 5; // Raised from 3 for better confidence
     const MIN_GAMES_DAY = 5;
 
     if (data.length < 10) {
-      return ["Play more games to unlock in-depth performance insights."];
+      return {
+        insights: ["Play more games to unlock in-depth performance insights."],
+        summaryDetails: null as null,
+      };
     }
 
     let generatedInsights: string[] = [];
+    let summaryDetails: {
+      comfortPicks: string[];
+      hiddenGems: string[];
+      theGrind: string[];
+    } | null = null;
 
     // --- 2. Champion Quadrant Analysis (Play Rate vs. Win Rate) ---
     const champStats: { [key: string]: { wins: number; total: number } } = {};
@@ -497,10 +514,49 @@ const KeyInsights: React.FC<{
         ),
       }));
 
-    if (validChamps.length > 1) {
+    if (validChamps.length > 3) {
       const avgPlayRate =
         validChamps.reduce((acc, c) => acc + c.total, 0) / validChamps.length;
 
+      // --- NEW: Quadrant Summary Insight ---
+      const comfortPicksCount = validChamps.filter(
+        (c) => c.total >= avgPlayRate && c.wr >= 52
+      ).length;
+      const hiddenGemsCount = validChamps.filter(
+        (c) => c.total < avgPlayRate && c.wr >= 55
+      ).length;
+      const theGrindCount = validChamps.filter(
+        (c) => c.total >= avgPlayRate && c.wr < 48
+      ).length;
+
+      const insightParts = [];
+      if (comfortPicksCount > 0)
+        insightParts.push(
+          `**${comfortPicksCount} Comfort Pick${
+            comfortPicksCount > 1 ? "s" : ""
+          }** to rely on`
+        );
+      if (hiddenGemsCount > 0)
+        insightParts.push(
+          `**${hiddenGemsCount} Hidden Gem${
+            hiddenGemsCount > 1 ? "s" : ""
+          }** to explore`
+        );
+      if (theGrindCount > 0)
+        insightParts.push(
+          `**${theGrindCount} champion${
+            theGrindCount > 1 ? "s" : ""
+          } in 'The Grind'** that may need review`
+        );
+
+      if (insightParts.length > 0) {
+        let summary =
+          "Your champion pool analysis shows " + insightParts.join(", ") + ".";
+        summary = summary.replace(/,([^,]*)$/, " and$1"); // Grammar fix for the last comma
+        generatedInsights.push(summary);
+      }
+
+      // --- Original, Specific Champion Insights ---
       const comfortPicks = validChamps.filter(
         (c) => c.total >= avgPlayRate && c.wr >= 52
       );
@@ -510,6 +566,15 @@ const KeyInsights: React.FC<{
       const theGrind = validChamps.filter(
         (c) => c.total >= avgPlayRate && c.wr < 48
       );
+
+      // Attach details for tooltip on the summary insight
+      if (!summaryDetails) {
+        summaryDetails = {
+          comfortPicks: comfortPicks.map((c) => c.name),
+          hiddenGems: hiddenGems.map((c) => c.name),
+          theGrind: theGrind.map((c) => c.name),
+        };
+      }
 
       // Prioritize the most actionable insights
       if (theGrind.length > 0) {
@@ -606,32 +671,114 @@ const KeyInsights: React.FC<{
       }
     }
 
-    return generatedInsights.length > 0
-      ? generatedInsights
-      : ["Keep playing to gather more data for insights!"];
+    return {
+      insights:
+        generatedInsights.length > 0
+          ? generatedInsights
+          : ["Keep playing to gather more data for insights!"],
+      summaryDetails,
+    };
   }, [data, overallWinRate, smoothingMethod, kValue]);
+
+  // Helper: render insight text with bold markdown
+  const renderInsightHtml = (text: string) =>
+    text.replace(
+      /\*\*(.*?)\*\*/g,
+      '<strong class="font-semibold text-card-foreground">$1</strong>'
+    );
 
   return (
     <ul className="space-y-3 text-sm">
-      {" "}
-      {/* Adjusted spacing for better balance */}
-      {insights.map((insight, i) => (
-        // --- MODIFIED HERE ---
-        <li key={i} className="flex items-center gap-3">
-          {" "}
-          {/* Changed items-start to items-center */}
-          <span className="text-primary">&#9679;</span>{" "}
-          {/* Reverted to original dot */}
-          <span
-            dangerouslySetInnerHTML={{
-              __html: insight.replace(
-                /\*\*(.*?)\*\*/g,
-                '<strong class="font-semibold text-card-foreground">$1</strong>'
-              ),
-            }}
-          />
-        </li>
-      ))}
+      {insights.map((insight: string, i: number) => {
+        const isSummary =
+          i === 0 &&
+          summaryDetails &&
+          insight.startsWith("Your champion pool analysis shows");
+        if (isSummary && summaryDetails) {
+          const { comfortPicks, hiddenGems, theGrind } = summaryDetails;
+          const segments: Array<{
+            key: "comfort" | "hidden" | "grind";
+            count: number;
+            label: string;
+            tail: string;
+            items: string[];
+          }> = [];
+          if (comfortPicks.length > 0) {
+            const count = comfortPicks.length;
+            segments.push({
+              key: "comfort",
+              count,
+              label: `${count} Comfort Pick${count > 1 ? "s" : ""}`,
+              tail: " to rely on",
+              items: comfortPicks,
+            });
+          }
+          if (hiddenGems.length > 0) {
+            const count = hiddenGems.length;
+            segments.push({
+              key: "hidden",
+              count,
+              label: `${count} Hidden Gem${count > 1 ? "s" : ""}`,
+              tail: " to explore",
+              items: hiddenGems,
+            });
+          }
+          if (theGrind.length > 0) {
+            const count = theGrind.length;
+            segments.push({
+              key: "grind",
+              count,
+              label: `${count} champion${count > 1 ? "s" : ""} in 'The Grind'`,
+              tail: " that may need review",
+              items: theGrind,
+            });
+          }
+
+          return (
+            <li key={i} className="flex items-center gap-3">
+              <span className="text-primary">&#9679;</span>
+              <span>
+                <span>Your champion pool analysis shows </span>
+                {segments.map((seg, idx) => (
+                  <React.Fragment key={seg.key}>
+                    {idx > 0 && (
+                      <span>
+                        {idx === segments.length - 1 ? " and " : ", "}
+                      </span>
+                    )}
+                    <ShadcnTooltip>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-help underline decoration-dotted underline-offset-4">
+                          <strong className="font-semibold text-card-foreground">
+                            {seg.label}
+                          </strong>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent sideOffset={6} className="max-w-80">
+                        <p className="text-primary-foreground">
+                          {seg.items.join(", ")}
+                        </p>
+                      </TooltipContent>
+                    </ShadcnTooltip>
+                    <span>{seg.tail}</span>
+                  </React.Fragment>
+                ))}
+                <span>.</span>
+              </span>
+            </li>
+          );
+        }
+        return (
+          <li key={i} className="flex items-center gap-3">
+            <span className="text-primary">&#9679;</span>
+            <span
+              dangerouslySetInnerHTML={{
+                __html: renderInsightHtml(insight),
+              }}
+            />
+          </li>
+        );
+      })}
     </ul>
   );
 };
@@ -735,22 +882,26 @@ const RollingWinRateTrend: React.FC<{
   );
 };
 
-const ChampionPerformanceQuadrant: React.FC<{
-  data: MatchHistoryData;
-  overallWinRate: number;
-  smoothingMethod: SmoothingMethods;
-  kValue: number;
-}> = ({ data, overallWinRate, smoothingMethod, kValue }) => {
-  const MIN_GAMES = 3;
-  const quadrantData = useMemo(() => {
+const ChampionPerformanceQuadrant: React.FC<
+  ChampionPerformanceQuadrantProps
+> = ({
+  data,
+  overallWinRate,
+  smoothingMethod,
+  kValue,
+  minQuadrantGames, // Receive as a prop
+}) => {
+  const { quadrantData, avgPlayRate, maxPlayRate } = useMemo(() => {
     const stats: { [key: string]: { wins: number; total: number } } = {};
     data.forEach((g) => {
       if (!stats[g.champion]) stats[g.champion] = { wins: 0, total: 0 };
       stats[g.champion].total++;
       if (g.outcome === "Win") stats[g.champion].wins++;
     });
-    return Object.entries(stats)
-      .filter(([, s]) => s.total >= MIN_GAMES)
+
+    const filteredChamps = Object.entries(stats)
+      // MODIFICATION: Use the new state for filtering
+      .filter(([, s]) => s.total >= minQuadrantGames)
       .map(([name, s]) => ({
         name,
         playRate: s.total,
@@ -761,104 +912,488 @@ const ChampionPerformanceQuadrant: React.FC<{
           smoothingMethod,
           kValue
         ),
-      }));
-  }, [data, overallWinRate, smoothingMethod, kValue]);
+      }))
+      // Prioritize higher play-rate champs so their labels get placed first
+      .sort((a, b) => b.playRate - a.playRate);
 
-  if (quadrantData.length < 2) {
+    if (filteredChamps.length === 0) {
+      return { quadrantData: [], avgPlayRate: 0, maxPlayRate: 0 };
+    }
+
+    const avg =
+      filteredChamps.reduce((acc, d) => acc + d.playRate, 0) /
+      filteredChamps.length;
+    const max = filteredChamps.reduce(
+      (max, d) => (d.playRate > max ? d.playRate : max),
+      0
+    );
+
+    return {
+      quadrantData: filteredChamps,
+      avgPlayRate: avg,
+      maxPlayRate: max * 1.1, // Add padding for labels
+    };
+  }, [data, overallWinRate, smoothingMethod, kValue, minQuadrantGames]);
+
+  // Ensure hooks are called before any conditional return to maintain stable hooks order
+  // Simple overlap-aware label placement for scatter points
+  type Box = { x1: number; y1: number; x2: number; y2: number };
+  const placedBoxesRef = useRef<Box[]>([]);
+  // Reset for each render of this chart
+  placedBoxesRef.current = [];
+
+  if (quadrantData.length < 1) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <p className="text-muted-foreground">
-          Play at least two champions {MIN_GAMES} times each to see this chart.
+      <div className="flex items-center justify-center h-full min-h-[300px]">
+        <p className="text-muted-foreground text-center p-4">
+          Not enough data for this view.
+          <br />
+          Try adjusting the 'Min Games' filter.
         </p>
       </div>
     );
   }
 
-  const avgPlayRate =
-    quadrantData.reduce((acc, d) => acc + d.playRate, 0) / quadrantData.length;
+  // Quadrant Labels are drawn via ReferenceDot below to use data coordinates
+
+  const renderSmartLabel = (props: any) => {
+    const { x, y, value } = props as { x: number; y: number; value: string };
+    if (typeof x !== "number" || typeof y !== "number" || !value) return null;
+
+    const fontSize = 10; // px
+    const padX = 4;
+    const padY = 2;
+    const charW = fontSize * 0.6; // approx width per character
+    const width = Math.max(10, value.length * charW) + padX * 2;
+    const height = fontSize + padY * 2;
+
+    const candidates: Array<{
+      // position relative to point, with text anchor/baseline assumptions
+      computeBox: () => Box;
+      textProps: {
+        x: number;
+        y: number;
+        textAnchor: "start" | "middle" | "end";
+        dominantBaseline: string;
+      };
+    }> = [
+      // top
+      {
+        computeBox: () => ({
+          x1: x - width / 2,
+          y1: y - 8 - height,
+          x2: x + width / 2,
+          y2: y - 8,
+        }),
+        textProps: {
+          x,
+          y: y - 8 - padY,
+          textAnchor: "middle",
+          dominantBaseline: "text-bottom",
+        },
+      },
+      // right
+      {
+        computeBox: () => ({
+          x1: x + 8,
+          y1: y - height / 2,
+          x2: x + 8 + width,
+          y2: y + height / 2,
+        }),
+        textProps: {
+          x: x + 8 + padX,
+          y,
+          textAnchor: "start",
+          dominantBaseline: "middle",
+        },
+      },
+      // left
+      {
+        computeBox: () => ({
+          x1: x - 8 - width,
+          y1: y - height / 2,
+          x2: x - 8,
+          y2: y + height / 2,
+        }),
+        textProps: {
+          x: x - 8 - padX,
+          y,
+          textAnchor: "end",
+          dominantBaseline: "middle",
+        },
+      },
+      // bottom
+      {
+        computeBox: () => ({
+          x1: x - width / 2,
+          y1: y + 8,
+          x2: x + width / 2,
+          y2: y + 8 + height,
+        }),
+        textProps: {
+          x,
+          y: y + 8 + height - padY,
+          textAnchor: "middle",
+          dominantBaseline: "alphabetic",
+        },
+      },
+      // top-right
+      {
+        computeBox: () => ({
+          x1: x + 4,
+          y1: y - 4 - height,
+          x2: x + 4 + width,
+          y2: y - 4,
+        }),
+        textProps: {
+          x: x + 4 + padX,
+          y: y - 4 - padY,
+          textAnchor: "start",
+          dominantBaseline: "text-bottom",
+        },
+      },
+      // top-left
+      {
+        computeBox: () => ({
+          x1: x - 4 - width,
+          y1: y - 4 - height,
+          x2: x - 4,
+          y2: y - 4,
+        }),
+        textProps: {
+          x: x - 4 - padX,
+          y: y - 4 - padY,
+          textAnchor: "end",
+          dominantBaseline: "text-bottom",
+        },
+      },
+    ];
+
+    const overlaps = (a: Box, b: Box) =>
+      !(a.x2 < b.x1 || a.x1 > b.x2 || a.y2 < b.y1 || a.y1 > b.y2);
+
+    let chosen: { box: Box; textProps: any } | null = null;
+    for (const cand of candidates) {
+      const box = cand.computeBox();
+      const collides = placedBoxesRef.current.some((p) => overlaps(box, p));
+      if (!collides) {
+        chosen = { box, textProps: cand.textProps };
+        break;
+      }
+    }
+    if (!chosen) return null; // give up if all positions collide
+    placedBoxesRef.current.push(chosen.box);
+
+    // Render label with a subtle stroke for readability
+    return (
+      <text
+        {...chosen.textProps}
+        fontSize={fontSize}
+        fill="#111827"
+        stroke="#ffffff"
+        strokeWidth={3}
+        style={{ paintOrder: "stroke fill" }}
+      >
+        {value}
+      </text>
+    );
+  };
 
   return (
-    <ResponsiveContainer width="100%" height={400}>
-      <ScatterChart margin={{ top: 20, right: 30, bottom: 40, left: 20 }}>
-        <CartesianGrid />
-        <XAxis
-          type="number"
-          dataKey="playRate"
-          name="Games Played"
-          unit="g"
-          label={{
-            value: "Games Played",
-            position: "insideBottom",
-            offset: -15,
-          }}
-        />
-        <YAxis
-          type="number"
-          dataKey="winRate"
-          name="Win Rate"
-          unit="%"
-          domain={[0, 100]}
-          label={{
-            value: "Win Rate",
-            angle: -90,
-            position: "insideLeft",
-            offset: 10,
-          }}
-        />
-        <ZAxis type="number" dataKey="playRate" range={[50, 500]} />
-        <Tooltip
-          content={<CustomTooltip />}
-          cursor={{ strokeDasharray: "3 3" }}
-        />
-        <ReferenceLine
-          y={50}
-          stroke="hsl(var(--muted-foreground))"
-          strokeDasharray="3 3"
-        />
-        <ReferenceLine
-          x={avgPlayRate}
-          stroke="hsl(var(--muted-foreground))"
-          strokeDasharray="3 3"
-        >
-          <RechartsLabel
-            value="Avg Play Rate"
-            position="insideTop"
-            offset={10}
-            fill="hsl(var(--muted-foreground))"
-            fontSize={12}
+    <>
+      {/* NEW: Slider controls are now in the Card component in the main return */}
+      <ResponsiveContainer width="100%" height={400}>
+        <ScatterChart margin={{ top: 30, right: 30, bottom: 40, left: 20 }}>
+          <CartesianGrid />
+          <XAxis
+            type="number"
+            dataKey="playRate"
+            name="Games Played"
+            unit="g"
+            domain={[0, maxPlayRate]}
+            allowDecimals={false}
+            tickFormatter={(t) => String(Math.round(Number(t)))}
+            label={{
+              value: "Games Played",
+              position: "insideBottom",
+              offset: -15,
+            }}
           />
-        </ReferenceLine>
-        <Scatter name="Champions" data={quadrantData}>
-          {quadrantData.map((entry, index) => (
-            <Cell
-              key={`cell-${index}`}
-              fill={getHeatmapColor(entry.winRate, entry.playRate)}
+          <YAxis
+            type="number"
+            dataKey="winRate"
+            name="Win Rate"
+            unit="%"
+            domain={[0, 100]}
+          >
+            <RechartsLabel
+              value="Adjusted Win Rate"
+              angle={-90}
+              position="insideLeft"
+              offset={0}
             />
-          ))}
-        </Scatter>
-      </ScatterChart>
-    </ResponsiveContainer>
+          </YAxis>
+          <ZAxis type="number" dataKey="playRate" range={[60, 600]} />
+          <Tooltip
+            cursor={{ strokeDasharray: "3 3" }}
+            content={({ active, payload }) => {
+              if (active && payload && payload.length) {
+                const p = payload[0].payload;
+                return (
+                  <div className="bg-background/80 backdrop-blur-sm p-2 border rounded-md shadow-lg text-sm">
+                    <p className="font-bold">{p.name}</p>
+                    <p>Games Played: {Math.round(p.playRate)}</p>
+                    <p>Adjusted WR: {p.winRate.toFixed(1)}%</p>
+                  </div>
+                );
+              }
+              return null;
+            }}
+          />
+
+          {/* Quadrant Backgrounds */}
+          <ReferenceArea
+            x1={avgPlayRate}
+            y1={50}
+            x2={maxPlayRate}
+            y2={100}
+            fill="hsl(130, 70%, 50%)"
+            fillOpacity={0.08}
+          />
+          <ReferenceArea
+            x1={0}
+            y1={50}
+            x2={avgPlayRate}
+            y2={100}
+            fill="hsl(200, 70%, 50%)"
+            fillOpacity={0.08}
+          />
+          <ReferenceArea
+            x1={avgPlayRate}
+            y1={0}
+            x2={maxPlayRate}
+            y2={50}
+            fill="hsl(0, 70%, 50%)"
+            fillOpacity={0.08}
+          />
+          <ReferenceArea
+            x1={0}
+            y1={0}
+            x2={avgPlayRate}
+            y2={50}
+            fill="hsl(30, 70%, 50%)"
+            fillOpacity={0.08}
+          />
+
+          {/* Quadrant Titles (domain-aware, non-overlapping) */}
+          <ReferenceDot
+            x={avgPlayRate + (maxPlayRate - avgPlayRate) / 2}
+            y={75}
+            r={0}
+            isFront
+          >
+            <RechartsLabel
+              value="Comfort Picks"
+              position="center"
+              fill="hsl(var(--muted-foreground))"
+              fontSize={12}
+            />
+          </ReferenceDot>
+          <ReferenceDot x={avgPlayRate / 2} y={75} r={0} isFront>
+            <RechartsLabel
+              value="Hidden Gems"
+              position="center"
+              fill="hsl(var(--muted-foreground))"
+              fontSize={12}
+            />
+          </ReferenceDot>
+          <ReferenceDot
+            x={avgPlayRate + (maxPlayRate - avgPlayRate) / 2}
+            y={25}
+            r={0}
+            isFront
+          >
+            <RechartsLabel
+              value="The Grind"
+              position="center"
+              fill="hsl(var(--muted-foreground))"
+              fontSize={12}
+            />
+          </ReferenceDot>
+          <ReferenceDot x={avgPlayRate / 2} y={25} r={0} isFront>
+            <RechartsLabel
+              value="Learning Curve"
+              position="center"
+              fill="hsl(var(--muted-foreground))"
+              fontSize={12}
+            />
+          </ReferenceDot>
+
+          {/* Reference Lines on top of areas */}
+          <ReferenceLine
+            y={50}
+            stroke="hsl(var(--muted-foreground))"
+            strokeDasharray="3 3"
+          />
+          <ReferenceLine
+            x={avgPlayRate}
+            stroke="hsl(var(--muted-foreground))"
+            strokeDasharray="3 3"
+          >
+            <RechartsLabel
+              value="Avg Games"
+              position="insideTopRight"
+              offset={10}
+              fill="hsl(var(--muted-foreground))"
+              fontSize={12}
+            />
+          </ReferenceLine>
+
+          <Scatter name="Champions" data={quadrantData}>
+            {/* Overlap-aware labels for each champion */}
+            <LabelList dataKey="name" content={renderSmartLabel} />
+            {quadrantData.map((entry, index) => (
+              <Cell
+                key={`cell-${index}`}
+                // MODIFICATION: Using the updated function
+                fill={getHeatmapColor(entry.winRate, entry.playRate)}
+              />
+            ))}
+          </Scatter>
+        </ScatterChart>
+      </ResponsiveContainer>
+    </>
   );
+};
+
+// Helper: best-effort mapping from display names to DDragon champion IDs
+// Uses DDragon tile images which don't require a version string:
+// https://ddragon.leagueoflegends.com/cdn/img/champion/tiles/{ID}_0.jpg
+const toDDragonId = (displayName: string) => {
+  if (!displayName) return "";
+  const special: Record<string, string> = {
+    Wukong: "MonkeyKing",
+    "Renata Glasc": "Renata",
+    "Nunu & Willump": "Nunu",
+    "Jarvan IV": "JarvanIV",
+    "Kha'Zix": "Khazix",
+    "Kai'Sa": "Kaisa",
+    "Cho'Gath": "Chogath",
+    "Vel'Koz": "Velkoz",
+    "Dr. Mundo": "DrMundo",
+    LeBlanc: "Leblanc",
+    "Tahm Kench": "TahmKench",
+    "Master Yi": "MasterYi",
+    "Miss Fortune": "MissFortune",
+    "Aurelion Sol": "AurelionSol",
+    "Xin Zhao": "XinZhao",
+    "Twisted Fate": "TwistedFate",
+    "Lee Sin": "LeeSin",
+    "Bel'Veth": "Belveth",
+    "Kog'Maw": "KogMaw",
+    "Rek'Sai": "RekSai",
+    Bard: "Bard", // example keepers for completeness
+  };
+  if (special[displayName]) return special[displayName];
+  // Generic fallback:
+  // 1) Remove punctuation, split on whitespace
+  const tokens = displayName
+    .replace(/[^A-Za-z0-9 ]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens.length === 0) return "";
+  if (tokens.length === 1) {
+    const t = tokens[0];
+    const hasLower = /[a-z]/.test(t);
+    const hasUpper = /[A-Z]/.test(t);
+    // If token already appears camel-cased (both lower and upper present), keep as-is.
+    if (hasLower && hasUpper) return t;
+    // If all caps, convert to PascalCase of the lowercase word (e.g., NASUS -> Nasus)
+    if (!hasLower && hasUpper) return t.charAt(0) + t.slice(1).toLowerCase();
+    // If all lowercase, PascalCase it
+    return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+  }
+  // Multi-token: PascalCase every token and join
+  return tokens
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+    .join("");
+};
+
+const getChampionTileUrl = (name: string) => {
+  const id = toDDragonId(name);
+  if (!id) return "";
+  return `https://ddragon.leagueoflegends.com/cdn/img/champion/tiles/${id}_0.jpg`;
 };
 
 const CustomTreemapContent = (props: any) => {
   const { depth, x, y, width, height, name, value, winRate } = props;
   const isParent = depth === 1;
+  const clipId = `clip-${String(name).replace(/[^a-z0-9]/gi, "-")}-${x}-${y}`;
+  const displayName: string = typeof name === "string" ? name : "";
+  const isUnknown = !displayName || /^unknown$/i.test(displayName);
+  const tileUrl =
+    !isParent && !isUnknown ? getChampionTileUrl(displayName) : "";
+
   return (
     <g>
-      <rect
-        x={x}
-        y={y}
-        width={width}
-        height={height}
-        style={{
-          fill: isParent
-            ? "hsl(var(--muted))"
-            : getHeatmapColor(winRate, value),
-          stroke: "hsl(var(--background))",
-          strokeWidth: 2 / (depth + 1e-10),
-        }}
-      />
+      {/* Clip to tile bounds so images don't spill over */}
+      {!isParent && tileUrl && (
+        <defs>
+          <clipPath id={clipId}>
+            <rect x={x} y={y} width={width} height={height} rx={2} ry={2} />
+          </clipPath>
+        </defs>
+      )}
+
+      {/* Background: role tiles use muted fill; champion tiles use icon image */}
+      {isParent ? (
+        <rect
+          x={x}
+          y={y}
+          width={width}
+          height={height}
+          style={{
+            fill: "hsl(var(--muted))",
+            stroke: "hsl(var(--background))",
+            strokeWidth: 2 / (depth + 1e-10),
+          }}
+        />
+      ) : (
+        <g clipPath={tileUrl ? `url(#${clipId})` : undefined}>
+          {tileUrl && (
+            <image
+              x={x}
+              y={y}
+              width={width}
+              height={height}
+              href={tileUrl}
+              preserveAspectRatio="xMidYMid slice"
+              opacity={0.9}
+            />
+          )}
+          {/* Subtle overlay with heat color to keep heatmap semantics */}
+          <rect
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            fill={getHeatmapColor(winRate, value)}
+            fillOpacity={0.22}
+          />
+          {/* Border on top for contrast */}
+          <rect
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            fill="transparent"
+            stroke="hsl(var(--background))"
+            strokeWidth={2 / (depth + 1e-10)}
+          />
+        </g>
+      )}
+
+      {/* Labels */}
       {width > 80 && height > 25 && (
         <text
           x={x + width / 2}
@@ -866,14 +1401,14 @@ const CustomTreemapContent = (props: any) => {
           textAnchor="middle"
           fill="#fff"
           fontSize={14}
-          stroke="hsl(var(--card-foreground))"
+          stroke="rgba(0,0,0,0.6)"
           strokeOpacity={0.6}
         >
           {name}
         </text>
       )}
       {!isParent && width > 80 && height > 40 && (
-        <text x={x + 4} y={y + 18} fill="#fff" fontSize={12} fillOpacity={0.9}>
+        <text x={x + 6} y={y + 18} fill="#fff" fontSize={12} fillOpacity={0.95}>
           {value} games
         </text>
       )}
@@ -889,21 +1424,34 @@ const RoleChampionTreemap: React.FC<{
 }> = ({ data, overallWinRate, smoothingMethod, kValue }) => {
   const treemapData = useMemo(() => {
     const roleMap: {
-      [role: string]: { [champion: string]: { wins: number; total: number } };
+      [role: string]: {
+        [champKey: string]: {
+          wins: number;
+          total: number;
+          displayName: string;
+        };
+      };
     } = {};
     data.forEach((g) => {
       if (!g.role || !g.champion) return;
+      const champKey = toDDragonId(g.champion);
+      // Skip unknown/empty champions to avoid rendering misleading tiles
+      if (!champKey) return;
       if (!roleMap[g.role]) roleMap[g.role] = {};
-      if (!roleMap[g.role][g.champion])
-        roleMap[g.role][g.champion] = { wins: 0, total: 0 };
-      roleMap[g.role][g.champion].total++;
-      if (g.outcome === "Win") roleMap[g.role][g.champion].wins++;
+      if (!roleMap[g.role][champKey])
+        roleMap[g.role][champKey] = {
+          wins: 0,
+          total: 0,
+          displayName: g.champion,
+        };
+      roleMap[g.role][champKey].total++;
+      if (g.outcome === "Win") roleMap[g.role][champKey].wins++;
     });
 
     return Object.entries(roleMap).map(([roleName, champions]) => ({
       name: roleName,
-      children: Object.entries(champions).map(([champName, stats]) => ({
-        name: champName,
+      children: Object.entries(champions).map(([_, stats]) => ({
+        name: stats.displayName,
         size: stats.total,
         winRate: calculateSmoothedWinRate(
           stats.wins,
@@ -1181,7 +1729,7 @@ const ClusterLegend = ({
   };
 
   return (
-    <div className="mt-4 space-y-2">
+    <div className="space-y-2">
       <h4 className="font-semibold text-sm text-card-foreground">
         Cluster Summary
       </h4>
@@ -1447,69 +1995,65 @@ const TimeOfDayClusteringChart: React.FC<{
 
   return (
     <div>
-      <ChartContainer config={chartConfig} className="w-full">
-        <ResponsiveContainer width="100%" height={380}>
-          <ScatterChart margin={{ top: 48, right: 20, bottom: 40, left: 10 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis
-              type="number"
-              dataKey="hour"
-              name="Hour"
-              domain={[-0.5, 23.5]}
-              ticks={[0, 3, 6, 9, 12, 15, 18, 21, 23]}
-              label={{
-                value: "Hour of Day",
-                position: "insideBottom",
-                offset: -10,
-              }}
-            />
-            <YAxis
-              type="number"
-              dataKey="dayIdx"
-              name="Day"
-              domain={[-0.3, 6.3]}
-              ticks={yTicks}
-              tickFormatter={(v) => dayShortLabels[v]}
-              label={{
-                value: "Day of Week",
-                angle: -90,
-                position: "insideLeft",
-              }}
-            />
-            <ZAxis
-              type="number"
-              dataKey="total"
-              range={[60, 400]}
-              name="Games"
-            />
-            <Tooltip
-              content={<ClusteringTooltip />}
-              cursor={{ strokeDasharray: "3 3" }}
-            />
-            {series.map((s, idx) => (
-              <Scatter
-                key={idx}
-                name={`Cluster ${idx + 1}`}
-                data={s}
-                // MODIFICATION: No longer need the modulo fallback since ChartContainer provides colors
-                fill={colors[idx]}
-              />
-            ))}
+      <ChartContainer
+        config={chartConfig}
+        className="w-full aspect-auto h-[380px]"
+      >
+        <ScatterChart margin={{ top: 48, right: 20, bottom: 40, left: 10 }}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis
+            type="number"
+            dataKey="hour"
+            name="Hour"
+            domain={[-0.5, 23.5]}
+            ticks={[0, 3, 6, 9, 12, 15, 18, 21, 23]}
+            label={{
+              value: "Hour of Day",
+              position: "insideBottom",
+              offset: -10,
+            }}
+          />
+          <YAxis
+            type="number"
+            dataKey="dayIdx"
+            name="Day"
+            domain={[-0.3, 6.3]}
+            ticks={yTicks}
+            tickFormatter={(v) => dayShortLabels[v]}
+            label={{
+              value: "Day of Week",
+              angle: -90,
+              position: "insideLeft",
+            }}
+          />
+          <ZAxis type="number" dataKey="total" range={[60, 400]} name="Games" />
+          <Tooltip
+            content={<ClusteringTooltip />}
+            cursor={{ strokeDasharray: "3 3" }}
+          />
+          {series.map((s, idx) => (
             <Scatter
-              name="Centroids"
-              data={centroidInfo}
-              // MODIFICATION: Use a direct color that stands out
-              fill="black"
-              stroke="white"
-            >
-              <LabelList dataKey="label" position="top" offset={8} />
-            </Scatter>
-          </ScatterChart>
-        </ResponsiveContainer>
+              key={idx}
+              name={`Cluster ${idx + 1}`}
+              data={s}
+              // MODIFICATION: No longer need the modulo fallback since ChartContainer provides colors
+              fill={colors[idx]}
+            />
+          ))}
+          <Scatter
+            name="Centroids"
+            data={centroidInfo}
+            // MODIFICATION: Use a direct color that stands out
+            fill="black"
+            stroke="white"
+          >
+            <LabelList dataKey="label" position="top" offset={8} />
+          </Scatter>
+        </ScatterChart>
       </ChartContainer>
 
       {/* MODIFICATION: Add the new legend and metrics footer */}
-      <div className="mt-2 px-4">
+      <div className="px-4">
         <ClusterLegend centroidInfo={centroidInfo} colors={colors} />
         <div className="text-xs text-muted-foreground mt-4 border-t pt-2">
           <span>Avg silhouette: {clustered.silhouette.toFixed(2)}</span>
@@ -1560,6 +2104,14 @@ interface DashboardProps {
   data: MatchHistoryResponse;
 }
 
+interface ChampionPerformanceQuadrantProps {
+  data: MatchHistoryData;
+  overallWinRate: number;
+  smoothingMethod: SmoothingMethods;
+  kValue: number;
+  minQuadrantGames: number; // Add this
+}
+
 function Dashboard({ data }: DashboardProps) {
   const matches: MatchHistoryData = useMemo(
     () => (data.data ? data.data.flat() : []),
@@ -1578,6 +2130,7 @@ function Dashboard({ data }: DashboardProps) {
   const [clusterCount, setClusterCount] = useState(4);
   const [minClusterGames, setMinClusterGames] = useState(2);
   const [wrInfluence, setWrInfluence] = useState(1);
+  const [minQuadrantGames, setMinQuadrantGames] = useState(5);
 
   const championOptions = useMemo(
     () => [
@@ -1648,17 +2201,16 @@ function Dashboard({ data }: DashboardProps) {
           <CardHeader>
             <CardTitle>Analysis Filters</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col md:flex-row gap-4 items-end">
+          <CardContent className="flex flex-col md:flex-row md:flex-wrap gap-4 items-end">
             {/* Role Filter */}
-            <div className="w-full md:w-auto flex flex-col gap-1.5">
+            <div className="w-full md:flex-1 min-w-[180px] flex flex-col gap-1.5">
               <Label>Role</Label>
               <Select onValueChange={setRoleFilter} defaultValue="ALL">
-                <SelectTrigger className="w-full md:w-[200px]">
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder="Filter by Role" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectLabel>Roles</SelectLabel>
                     {roleOptions.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value}>
                         {opt.label}
@@ -1669,15 +2221,14 @@ function Dashboard({ data }: DashboardProps) {
               </Select>
             </div>
             {/* Champion Filter */}
-            <div className="w-full md:w-auto flex flex-col gap-1.5">
+            <div className="w-full md:flex-1 min-w-[180px] flex flex-col gap-1.5">
               <Label>Champion</Label>
               <Select onValueChange={setChampionFilter} defaultValue="ALL">
-                <SelectTrigger className="w-full md:w-[200px]">
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder="Filter by Champion" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectLabel>Champions</SelectLabel>
                     {championOptions.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value}>
                         {opt.label}
@@ -1688,9 +2239,9 @@ function Dashboard({ data }: DashboardProps) {
               </Select>
             </div>
             {/* Smoothing Method Filter */}
-            <div className="w-full md:w-auto flex flex-col gap-1.5 relative">
+            <div className="w-full md:flex-1 min-w-[180px] flex flex-col gap-1.5 relative">
               {smoothingMethod === "bayesian" && (
-                <div className="absolute bottom-full mb-2 w-full md:w-[200px] space-y-2">
+                <div className="absolute bottom-full mb-2 w-full space-y-2">
                   <div className="flex justify-between items-center">
                     <div className="flex items-center gap-2">
                       <Label htmlFor="k-slider">Adjustment Strength (k)</Label>
@@ -1732,12 +2283,11 @@ function Dashboard({ data }: DashboardProps) {
                 }
                 defaultValue="none"
               >
-                <SelectTrigger className="w-full md:w-[200px]">
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select Method" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectLabel>Adjustment Formula</SelectLabel>
                     {Object.entries(smoothingMethodInfo).map(
                       ([key, { label, description, formula }]) => (
                         <ShadcnTooltip key={key} delayDuration={100}>
@@ -1763,14 +2313,27 @@ function Dashboard({ data }: DashboardProps) {
               </Select>
             </div>
             {/* Date Range Picker */}
-            <div className="w-full md:w-auto flex flex-col gap-1.5">
-              <Label htmlFor="dates">Date Range</Label>
+            <div className="w-full md:flex-1 min-w-[180px] flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="dates">Date Range</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => setDateRange(undefined)}
+                  disabled={!dateRange?.from}
+                  aria-label="Reset date range"
+                >
+                  Reset
+                </Button>
+              </div>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
                     id="dates"
-                    className="w-full md:w-[240px] justify-between text-left font-normal"
+                    className="w-full justify-between text-left font-normal"
                   >
                     {dateRange?.from ? (
                       dateRange.to ? (
@@ -2132,20 +2695,44 @@ function Dashboard({ data }: DashboardProps) {
           </CardContent>
         </Card>
 
-        {/* These two cards will sit side-by-side */}
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Champion Performance Quadrant</CardTitle>
-            <CardDescription>
-              Win rate vs. play rate for your champion pool.
-            </CardDescription>
+            {/* NEW: Add controls to the card header */}
+            <div className="flex justify-between items-start flex-wrap gap-4">
+              <div>
+                <CardTitle>Champion Performance Quadrant</CardTitle>
+                <CardDescription>
+                  Win rate vs. play rate for your champion pool.
+                </CardDescription>
+              </div>
+              <div className="w-48 space-y-2">
+                <div className="flex justify-between items-center">
+                  <Label htmlFor="min-games-quadrant" className="text-xs">
+                    Min Games
+                  </Label>
+                  <span className="text-sm font-medium text-muted-foreground">
+                    {minQuadrantGames}
+                  </span>
+                </div>
+                <Slider
+                  id="min-games-quadrant"
+                  min={1}
+                  max={20}
+                  step={1}
+                  value={[minQuadrantGames]}
+                  onValueChange={(v) => setMinQuadrantGames(v[0])}
+                />
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
+            {/* Pass the new state down to the component */}
             <ChampionPerformanceQuadrant
               data={filteredData}
               overallWinRate={overallWinRateDecimal}
               smoothingMethod={smoothingMethod}
               kValue={kValue}
+              minQuadrantGames={minQuadrantGames}
             />
           </CardContent>
         </Card>

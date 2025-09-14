@@ -316,7 +316,8 @@ const DailyWinRateChart: React.FC<{
     const stats = dayOrder.map((day) => ({ day, wins: 0, total: 0 }));
 
     data.forEach((game) => {
-      const dayIndex = new Date(game.timestamp).getDay();
+      const jsDay = new Date(game.timestamp).getDay(); // 0=Sun..6=Sat
+      const dayIndex = (jsDay + 6) % 7; // 0=Mon..6=Sun
       stats[dayIndex].total++;
       if (game.outcome === "Win") stats[dayIndex].wins++;
     });
@@ -380,7 +381,7 @@ const HourlyWinRateHeatmap: React.FC<{
   kValue: number;
 }> = ({ data, overallWinRate, smoothingMethod, kValue }) => {
   const heatmapData = useMemo(() => {
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const hours = Array.from({ length: 24 }, (_, i) => i);
     const stats = Array(7)
       .fill(0)
@@ -392,8 +393,10 @@ const HourlyWinRateHeatmap: React.FC<{
 
     data.forEach((game) => {
       const date = new Date(game.timestamp);
-      stats[date.getDay()][date.getHours()].total++;
-      if (game.outcome === "Win") stats[date.getDay()][date.getHours()].wins++;
+      const dayIdx = (date.getDay() + 6) % 7; // Monday-first
+      const hour = date.getHours();
+      stats[dayIdx][hour].total++;
+      if (game.outcome === "Win") stats[dayIdx][hour].wins++;
     });
     return { days, hours, stats };
   }, [data]);
@@ -1494,7 +1497,7 @@ const TimeOfDayHeatmap: React.FC<{
   kValue: number;
 }> = ({ data, overallWinRate, smoothingMethod, kValue }) => {
   const heatmapData = useMemo(() => {
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const timeBlocks = [
       { name: "Early Morning", hours: [0, 1, 2, 3, 4, 5] },
       { name: "Morning", hours: [6, 7, 8, 9, 10, 11] },
@@ -1513,7 +1516,8 @@ const TimeOfDayHeatmap: React.FC<{
 
     data.forEach((game) => {
       const date = new Date(game.timestamp);
-      const dayIndex = date.getDay();
+      // Remap JS getDay() (0=Sun..6=Sat) to Monday-first (0=Mon..6=Sun)
+      const dayIndex = (date.getDay() + 6) % 7;
       const hour = date.getHours();
       const timeBlockIndex = timeBlocks.findIndex((block) =>
         block.hours.includes(hour)
@@ -1606,7 +1610,7 @@ const TimeOfDayHeatmap: React.FC<{
 
 // --- Time-of-day K-means clustering scatter ---
 type ClusterPoint = {
-  dayIdx: number; // 0-6 (Sun-Sat)
+  dayIdx: number; // 0-6 (Mon-Sun)
   hour: number; // 0-23
   wr: number; // 0-100
   total: number; // games
@@ -1614,7 +1618,7 @@ type ClusterPoint = {
   f: [number, number, number, number, number];
 };
 
-const dayShortLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const dayShortLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function buildFeatures(
   dayIdx: number,
@@ -1725,7 +1729,8 @@ const ClusterLegend = ({
   };
 
   const getDayType = (dayIdx: number) => {
-    return dayIdx === 0 || dayIdx === 6 ? "Weekend" : "Weekday";
+    // Monday-first: 0..4 Weekday, 5..6 Weekend
+    return dayIdx >= 5 ? "Weekend" : "Weekday";
   };
 
   return (
@@ -1790,7 +1795,7 @@ const TimeOfDayClusteringChart: React.FC<{
       );
     data.forEach((g) => {
       const d = new Date(g.timestamp);
-      const day = d.getDay();
+      const day = (d.getDay() + 6) % 7; // Monday-first
       const h = d.getHours();
       stats[day][h].total++;
       if (g.outcome === "Win") stats[day][h].wins++;
@@ -1918,7 +1923,7 @@ const TimeOfDayClusteringChart: React.FC<{
     (_, c) => clustered.points.filter((p) => p.cluster === c)
   );
 
-  // Compute human-readable centroids in time space using circular means
+  // Compute human-readable centroids in time space using circular means (Monday-first indexing)
   const centroidInfo = series.map((arr, idx) => {
     let sDay = 0,
       cDay = 0,
@@ -2018,6 +2023,7 @@ const TimeOfDayClusteringChart: React.FC<{
             dataKey="dayIdx"
             name="Day"
             domain={[-0.3, 6.3]}
+            reversed
             ticks={yTicks}
             tickFormatter={(v) => dayShortLabels[v]}
             label={{
@@ -2036,14 +2042,12 @@ const TimeOfDayClusteringChart: React.FC<{
               key={idx}
               name={`Cluster ${idx + 1}`}
               data={s}
-              // MODIFICATION: No longer need the modulo fallback since ChartContainer provides colors
               fill={colors[idx]}
             />
           ))}
           <Scatter
             name="Centroids"
             data={centroidInfo}
-            // MODIFICATION: Use a direct color that stands out
             fill="black"
             stroke="white"
           >
@@ -2052,7 +2056,6 @@ const TimeOfDayClusteringChart: React.FC<{
         </ScatterChart>
       </ChartContainer>
 
-      {/* MODIFICATION: Add the new legend and metrics footer */}
       <div className="px-4">
         <ClusterLegend centroidInfo={centroidInfo} colors={colors} />
         <div className="text-xs text-muted-foreground mt-4 border-t pt-2">
@@ -2097,8 +2100,6 @@ const smoothingMethodInfo: Record<
       "\\frac{\\hat{p} + \\frac{z^2}{2n} - z \\sqrt{\\frac{\\hat{p}(1-\\hat{p}) + \\frac{z^2}{4n}}{n}}}{1 + \\frac{z^2}{n}}",
   },
 };
-
-// --- Main Dashboard Component ---
 
 interface DashboardProps {
   data: MatchHistoryResponse;

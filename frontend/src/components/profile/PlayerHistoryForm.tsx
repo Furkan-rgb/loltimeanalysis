@@ -71,17 +71,22 @@ export function PlayerHistoryForm({
 
   // Helper to determine the correct button text based on the app's state
   const getButtonText = () => {
+    // 1. Cooldown and loading states have top priority.
     if (cooldown > 0) return `Cooldown (${cooldown}s)`;
     if (isLoading) return "Fetching...";
 
+    // 2. Check if the form's current data differs from the data in the URL.
     const isNewSearch =
       formData.region !== urlParams.region ||
       formData.username !== urlParams.username ||
       formData.tag !== urlParams.tag;
 
-    if (isDataLoaded && !isNewSearch) return "Update";
-
-    return "Fetch History";
+    // 3. The button text should directly reflect the action that will be taken.
+    if (isNewSearch) {
+      return "Fetch History"; // If it's a new search, the action is to fetch.
+    } else {
+      return "Update"; // Otherwise, the action is to update the current player.
+    }
   };
 
   return (

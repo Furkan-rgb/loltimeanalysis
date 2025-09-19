@@ -49,6 +49,8 @@ import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
+  ChartLegend,
+  ChartLegendContent,
 } from "@/components/ui/chart";
 import {
   Select,
@@ -194,11 +196,11 @@ const StatCard: React.FC<{
   </Card>
 );
 
-// Removed unused WinLossDoughnutChart component
-
 const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
   data,
 }) => {
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+
   const chartConfig = {
     wins: { label: "Wins", color: "var(--chart-2)" },
     losses: { label: "Losses", color: "var(--chart-5)" },
@@ -210,7 +212,6 @@ const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
     UNKNOWN: { label: "Unknown", color: "var(--muted)" },
   } satisfies ChartConfig;
 
-  // Map data "name" to configured color (fallback to muted)
   const getColor = (name: string) =>
     (chartConfig as Record<string, { label: string; color: string }>)[name]
       ?.color ?? "var(--muted)";
@@ -225,32 +226,30 @@ const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
       },
       { wins: 0, losses: 0, roles: {} as { [key: string]: number } }
     );
-
-    // FIX: Removed the manual "fill" property from these data objects
     const winLoss = [
       { name: "wins", value: stats.wins },
       { name: "losses", value: stats.losses },
     ];
-
-    // FIX: Removed the manual "fill" property from these data objects
     const roles = Object.entries(stats.roles).map(([role, count]) => ({
       name: role,
       value: count,
     }));
-
-    return {
-      winLossData: winLoss,
-      roleData: roles,
-      totalGames: data.length,
-    };
+    return { winLossData: winLoss, roleData: roles, totalGames: data.length };
   }, [data]);
 
-  // Legend removed per request; keep chart simple
+  // NEW: Handlers for mouse enter/leave events
+  const handleMouseEnter = (item: any) => {
+    setHighlighted(item.name || item.value); // `item.value` is for the legend
+  };
+
+  const handleMouseLeave = () => {
+    setHighlighted(null);
+  };
 
   return (
     <ChartContainer
       config={chartConfig}
-      className="mx-auto aspect-square max-h-[250px]"
+      className="mx-auto aspect-square max-h-[300px]"
     >
       <PieChart>
         <ChartTooltip
@@ -263,9 +262,16 @@ const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
           nameKey="name"
           innerRadius={50}
           outerRadius={70}
+          onMouseEnter={handleMouseEnter} // MODIFIED: Added handler
+          onMouseLeave={handleMouseLeave} // MODIFIED: Added handler
         >
           {winLossData.map((d, i) => (
-            <Cell key={`winloss-${i}`} fill={getColor(d.name)} />
+            <Cell
+              key={`winloss-${i}`}
+              fill={getColor(d.name)}
+              // MODIFIED: Added conditional opacity
+              fillOpacity={highlighted && d.name !== highlighted ? 0.3 : 1}
+            />
           ))}
           <RechartsLabel
             content={({ viewBox }: { viewBox?: any }) => {
@@ -303,12 +309,25 @@ const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
           nameKey="name"
           innerRadius={80}
           outerRadius={100}
+          onMouseEnter={handleMouseEnter} // MODIFIED: Added handler
+          onMouseLeave={handleMouseLeave} // MODIFIED: Added handler
         >
           {roleData.map((d, i) => (
-            <Cell key={`role-${i}`} fill={getColor(d.name)} />
+            <Cell
+              key={`role-${i}`}
+              fill={getColor(d.name)}
+              // MODIFIED: Added conditional opacity
+              fillOpacity={highlighted && d.name !== highlighted ? 0.3 : 1}
+            />
           ))}
         </Pie>
-        {/* Legend removed */}
+        <ChartLegend
+          // MODIFIED: Added event handlers to the legend
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+          content={<ChartLegendContent nameKey="name" />}
+          className="-translate-y-2 flex-wrap gap-2 [&>*]:basis-1/4 [&>*]:justify-center"
+        />
       </PieChart>
     </ChartContainer>
   );
@@ -1030,6 +1049,7 @@ const RollingWinRateTrend: React.FC<{
   data: MatchHistoryData;
   windowSize: number;
 }> = ({ data, windowSize }) => {
+  // HOOK 1: Calculate the base trend data
   const trendData = useMemo(() => {
     if (data.length < windowSize) return [];
     const sortedGames = [...data].sort((a, b) => a.timestamp - b.timestamp);
@@ -1037,7 +1057,7 @@ const RollingWinRateTrend: React.FC<{
     for (let i = 0; i <= sortedGames.length - windowSize; i++) {
       const window = sortedGames.slice(i, i + windowSize);
       const wins = window.filter((g) => g.outcome === "Win").length;
-      const endTsMs = sortedGames[i + windowSize - 1].timestamp; // already ms
+      const endTsMs = sortedGames[i + windowSize - 1].timestamp;
       rollingData.push({
         game: `Game ${i + windowSize}`,
         winRate: (wins / windowSize) * 100,
@@ -1048,20 +1068,9 @@ const RollingWinRateTrend: React.FC<{
     return rollingData;
   }, [data, windowSize]);
 
-  if (trendData.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <p className="text-muted-foreground">
-          Not enough games for a rolling trend of {windowSize}.
-        </p>
-      </div>
-    );
-  }
-
-  // Ensure a visible line when only one data point exists
+  // HOOK 2: Ensure a visible line when only one data point exists
   const plottedData = useMemo(() => {
     if (trendData.length === 1) {
-      // Duplicate the single point with adjacent indices for a visible line
       return [
         { ...trendData[0], index: 0 },
         { ...trendData[0], index: 1 },
@@ -1070,11 +1079,10 @@ const RollingWinRateTrend: React.FC<{
     return trendData;
   }, [trendData]);
 
-  // Compute a slow-moving trend (EMA) over the rolling win rate series
+  // HOOK 3: Compute a slow-moving trend (EMA) over the rolling win rate series
   const dataWithSlowTrend = useMemo(() => {
     if (plottedData.length === 0)
       return [] as Array<(typeof plottedData)[number] & { slowTrend: number }>;
-    // Default slow period ~ 2x of the rolling window, with a sensible minimum
     const slowPeriod = Math.max(10, Math.round(windowSize * 2));
     const alpha = 2 / (slowPeriod + 1);
     let ema = plottedData[0].winRate;
@@ -1087,6 +1095,16 @@ const RollingWinRateTrend: React.FC<{
     });
     return out;
   }, [plottedData, windowSize]);
+
+  if (trendData.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <p className="text-muted-foreground">
+          Not enough games for a rolling trend of {windowSize}.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <ResponsiveContainer width="100%" height={300}>
@@ -1126,7 +1144,6 @@ const RollingWinRateTrend: React.FC<{
             strokeWidth={2}
           />
         )}
-        {/* Use a strong fixed color to avoid theme visibility issues */}
         <Line
           type="monotone"
           dataKey="winRate"
@@ -1139,7 +1156,6 @@ const RollingWinRateTrend: React.FC<{
           name="Rolling Win Rate"
           unit="%"
         />
-        {/* Slow-moving trend overlay (EMA) */}
         <Line
           type="monotone"
           dataKey="slowTrend"

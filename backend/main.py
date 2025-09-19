@@ -1,184 +1,239 @@
 import sys
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from arq.connections import create_pool, RedisSettings, ArqRedis
-import asyncio
 import json
+import asyncio
+import logging
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-import config
+from contextlib import asynccontextmanager
+from temporalio.client import Client, WorkflowExecutionStatus
+from temporalio.exceptions import WorkflowAlreadyStartedError
 import redis
-
-try:
-    # This import will now fail if the synchronous client can't connect
-    import redis_service
-except redis.exceptions.ConnectionError:
-    # The error is already printed by redis_service, just exit.
-    sys.exit(1)
+from schemas import ProgressState, CompletedState, FailedState, NoMatchesState
+from fastapi import status
+from temporalio.api.enums.v1 import TaskQueueType
+import time
+import config
+import redis_service
+import key_service
+from temporal_workflows import FetchMatchHistoryWorkflow
 
 # --- APP INITIALIZATION ---
-
-# This global variable will hold the ARQ connection pool
-arq_redis_pool: ArqRedis | None = None
-
+temporal_client: Client | None = None
+redis_client: redis.Redis | None = None
+logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Handles startup and shutdown events, ensuring critical connections
-    are established before the application starts serving requests.
-    """
-    global arq_redis_pool
-    print("FastAPI starting up: Checking critical connections...")
-    try:
-        # 1. Initialize ARQ connection pool
-        arq_redis_pool = await create_pool(
-            RedisSettings(
-                host=config.REDIS_HOST, port=config.REDIS_PORT, database=config.REDIS_DB
-            )
-        )
-        # 2. Verify the ARQ pool connection
-        await arq_redis_pool.ping()
-        print("Successfully connected to Redis for ARQ background tasks.")
+    global temporal_client, redis_client
+    logging.info("FastAPI starting up...")
 
-    except (redis.exceptions.ConnectionError, TimeoutError) as e:
-        print(f"FATAL: Could not establish ARQ connection to Redis: {e}")
-        print("Application will not start.")
+    # --- MODIFICATION START ---
+    # Retry connecting to the Temporal server to avoid race conditions on startup
+    max_retries = 10
+    retry_delay = 3  # seconds
+    for attempt in range(max_retries):
+        try:
+            temporal_client = await Client.connect(f"{config.TEMPORAL_HOST}:7233")
+            logging.info("Successfully connected to Temporal server.")
+            break  # Exit loop on success
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logging.warning(
+                    f"Connection to Temporal failed with {type(e).__name__}: {e}. "
+                    f"Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})"
+                )
+                await asyncio.sleep(retry_delay)
+            else:
+                logging.error("FATAL: Could not connect to Temporal server after multiple retries.")
+                sys.exit(1) # Exit if all retries fail
+    # --- MODIFICATION END ---
+
+    try:
+        # Connect to Redis (can also have a retry loop if needed, but it's usually faster)
+        redis_client = redis_service.get_redis_client()
+        logging.info("Successfully connected to Redis server.")
+    except Exception as e:
+        logging.error(f"FATAL: Could not connect to Redis: {e}")
         sys.exit(1)
 
-    # If all checks pass, yield to let the app run
-    yield
+    yield # Application runs here
 
-    # Code to run on shutdown
-    print("FastAPI shutting down: Closing ARQ connection pool...")
-    if arq_redis_pool:
-        await arq_redis_pool.close()
-
+    logging.info("FastAPI shutting down.")
+    if temporal_client:
+        await temporal_client.disconnect()
 
 app = FastAPI(lifespan=lifespan)
 
-# --- MIDDLEWARE ---
+# --- DEPENDENCY ---
+def get_redis() -> redis.Redis:
+    """Dependency to provide the Redis client to routes."""
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="Redis connection not available")
+    return redis_client
 
-# Allow frontend requests from localhost
+# --- MIDDLEWARE ---
 origins = ["http://localhost", "http://localhost:8080", "http://localhost:5173"]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+# --- ENDPOINTS ---
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health_check(r: redis.Redis = Depends(get_redis)):
+    """
+    Performs a comprehensive health check on all critical dependencies.
+    Returns 200 OK if all healthy, 503 Service Unavailable otherwise.
+    """
+    if not temporal_client:
+        raise HTTPException(status_code=503, detail="Temporal client not initialized.")
+
+    try:
+        # 1. Check Redis connection
+        if not r.ping():
+            raise HTTPException(status_code=503, detail="Redis connection failed (ping).")
+
+        # 2. Check Temporal gRPC connection
+        await temporal_client.check_health()
+
+        # 3. Check for active Temporal workers polling the task queue
+        task_queue_name = config.TEMPORAL_TASK_QUEUE
+        tq_desc = await temporal_client.workflow_service.describe_task_queue(
+            namespace="default",
+            task_queue={"name": task_queue_name, "kind": TaskQueueType.WORKFLOW},
+        )
+        if not tq_desc.pollers:
+            raise HTTPException(
+                status_code=503,
+                detail=f"No active workers found on task queue '{task_queue_name}'.",
+            )
+        
+        # 4. Check for a recent Temporal worker heartbeat in Redis
+        heartbeat_key = f"worker:heartbeat:{task_queue_name}"
+        heartbeat_ttl_seconds = 60
+
+        heartbeat_timestamp = r.get(heartbeat_key)
+        if not heartbeat_timestamp:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Temporal worker heartbeat missing from Redis key '{heartbeat_key}'.",
+            )
+        
+        time_since_heartbeat = time.time() - float(heartbeat_timestamp)
+        if time_since_heartbeat > heartbeat_ttl_seconds:
+             raise HTTPException(
+                status_code=503,
+                detail=f"Temporal worker heartbeat is stale ({int(time_since_heartbeat)}s old).",
+            )
+
+    except Exception as e:
+        # Catch any failure during the checks and report it as a service unavailable
+        raise HTTPException(status_code=503, detail=f"Health check failed: {e}")
+
+    return {
+        "status": "ok",
+        "services": ["redis", "temporal_connection", "temporal_worker_pollers", "temporal_worker_heartbeat"]
+    }
 
 
 @app.get("/history/{game_name}/{tag_line}/{region}")
-def get_history(game_name: str, tag_line: str, region: str):
-    """
-    Retrieves a player's match history directly from the cache.
-    This is a simple, non-blocking read operation.
-    """
-    player_id = f"{game_name.lower()}#{tag_line.lower()}@{region.lower()}"
-    cache_key = f"cache:{player_id}"
-
-    if cached_data := redis_service.get_from_cache(cache_key):
-        print(f"CACHE HIT for {player_id}")
+def get_history(game_name: str, tag_line: str, region: str, r: redis.Redis = Depends(get_redis)):
+    player_id = key_service.get_player_id(game_name, tag_line, region)
+    cache_key = key_service.get_cache_key(player_id)
+    # Correctly pass the redis client 'r' to the function
+    if cached_data := redis_service.get_from_cache(r, cache_key):
         return {"status": "cached", "data": cached_data}
-
-    # If no data is found in the cache, return a 404
-    raise HTTPException(
-        status_code=404,
-        detail="No match history found for this player. Please trigger an update.",
-    )
-
+    raise HTTPException(status_code=404, detail="No match history found.")
 
 @app.post("/update/{game_name}/{tag_line}/{region}")
-async def trigger_update_job(game_name: str, tag_line: str, region: str):
-    """
-    Triggers a background job to fetch or update a player's match history.
-    This is a non-blocking action endpoint.
-    """
-    player_id = f"{game_name.lower()}#{tag_line.lower()}@{region.lower()}"
-    cooldown_key = f"cooldown:{player_id}"
-    lock_key = f"lock:{player_id}"
+async def trigger_update_job(game_name: str, tag_line: str, region: str, r: redis.Redis = Depends(get_redis)):
+    player_id = key_service.get_player_id(game_name, tag_line, region)
+    cooldown_key = key_service.get_cooldown_key(player_id)
 
-    # 1. Check for cooldown
-    if (ttl := redis_service.get_cooldown_ttl(cooldown_key)) > 0:
-        raise HTTPException(
-            status_code=429,  # Too Many Requests
-            detail=f"This player is on a cooldown. Please try again in {ttl} seconds.",
+    # Correctly pass the redis client 'r'
+    if (ttl := redis_service.get_cooldown_ttl(r, cooldown_key)) > 0:
+        raise HTTPException(status_code=429, detail=f"Please try again in {ttl} seconds.")
+    
+    # Set cooldown BEFORE starting workflow to prevent race conditions
+    redis_service.set_cooldown(r, cooldown_key)
+
+    try:
+        await temporal_client.start_workflow(
+            FetchMatchHistoryWorkflow.run,
+            args=[game_name, tag_line, region],
+            id=player_id,
+            task_queue="match-history-task-queue",
         )
-
-    # 2. Atomically acquire the lock
-    if not redis_service.acquire_lock(lock_key, config.LOCK_TIMEOUT_SECONDS):
-        print(f"Update already in progress for {player_id}")
+        return {"status": "started"}
+    except WorkflowAlreadyStartedError:
         return {"status": "in_progress"}
-
-    # 3. Enqueue the dispatcher job
-    print(f"Lock acquired. Enqueuing dispatcher job for {player_id}")
-    await arq_redis_pool.enqueue_job("dispatch_fetch_job", game_name, tag_line, region)
-    return {"status": "started"}
-
+    except Exception as e:
+        # If workflow fails to start, we should ideally clear the cooldown
+        # For simplicity, we'll leave it, but in production you might remove it.
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/stream-status/{game_name}/{tag_line}/{region}")
-async def stream_status(game_name: str, tag_line: str, region: str):
-    """
-    Streams status updates using Server-Sent Events (SSE).
-    This keeps a connection open and pushes data as the job progresses.
-    """
-    player_id = f"{game_name.lower()}#{tag_line.lower()}@{region.lower()}"
+async def stream_status(game_name: str, tag_line: str, region: str, r: redis.Redis = Depends(get_redis)):
+    player_id = key_service.get_player_id(game_name, tag_line, region)
 
     async def event_generator():
-        """Yields status updates as SSE messages."""
-        last_status = None
-        while True:
-            # --- Define all keys used for status checking ---
-            lock_key = f"lock:{player_id}"
-            aggregation_key = f"job:{player_id}:agg"
-            cache_key = f"cache:{player_id}"
-            error_key = f"job:{player_id}:error"  # Key for specific error messages
-
-            current_status = {}
-
-            # 1. Check for a specific error message first
-            if error_message := redis_service.redis_client.get(error_key):
-                current_status = {"status": "error", "message": error_message}
-                redis_service.redis_client.delete(error_key)  # Clean up after reading
-
-            # 2. Check for progress data from the aggregation key
-            elif status_data := redis_service.redis_client.hgetall(aggregation_key):
-                current_status = {
-                    "status": "progress",
-                    "processed": int(status_data.get("processed", 0)),
-                    "total": int(status_data.get("total", 1)),
-                }
-            
-            # 3. Check if the job is running (lock exists) but progress hasn't started
-            elif redis_service.redis_client.exists(lock_key):
-                current_status = {"status": "progress", "processed": 0, "total": 100}
-            
-            # 4. Check if the job is successfully completed (cache exists)
-            elif redis_service.redis_client.exists(cache_key):
-                current_status = {"status": "ready"}
-            
-            # 5. Otherwise, the job is not running and there's no data
-            else:
-                current_status = {"status": "idle_no_data"}
-
-            # --- Push an update only if the status has changed ---
-            if current_status != last_status:
-                yield f"data: {json.dumps(current_status)}\n\n"
-                last_status = current_status
-
-            # --- If the job is done, errored, or not running, close the stream ---
-            if current_status["status"] in ["ready", "idle_no_data", "error"]:
+        # First, patiently wait for the workflow handle to exist.
+        handle = None
+        for _ in range(10): # Try for 10 seconds
+            try:
+                handle = temporal_client.get_workflow_handle(player_id)
                 break
+            except Exception:
+                await asyncio.sleep(1)
+        
+        # If it never appeared, the update failed to start.
+        if not handle:
+            cache_key = key_service.get_cache_key(player_id)
+            model = CompletedState() if r.exists(cache_key) else FailedState(error="Update process failed to start.")
+            yield f"data: {model.model_dump_json()}\n\n"
+            return
 
-            await asyncio.sleep(1)  # Check for updates every second
+        # Now, stream status from the handle we found.
+        try:
+            while True:
+                status_model = None
+                try:
+                    # This block is now protected from transient Temporal errors.
+                    desc = await handle.describe()
+
+                    if desc.status == WorkflowExecutionStatus.RUNNING:
+                        query_result = await handle.query(FetchMatchHistoryWorkflow.get_status)
+                        if query_result.get("status") == "progress":
+                            status_model = ProgressState(
+                                status="progress",
+                                processed=query_result.get("processed", 0),
+                                total=query_result.get("total", 0)
+                            )
+                    elif desc.status == WorkflowExecutionStatus.COMPLETED:
+                        status_model = CompletedState(status="completed")
+                    else: # FAILED, TIMED_OUT, CANCELED
+                        status_model = FailedState(status="failed",error=f"Workflow ended with status: {desc.status.name}")
+
+                except Exception as e:
+                    logging.warning(f"Error during stream for {player_id}: {e}. Retrying...")
+                    # Don't set a status_model, just let the loop sleep and try again.
+
+                if status_model:
+                    yield f"data: {status_model.model_dump_json()}\n\n"
+
+                # If the workflow reached a terminal state, stop streaming.
+                if 'desc' in locals() and desc.status not in [WorkflowExecutionStatus.RUNNING]:
+                    break
+                
+                await asyncio.sleep(1)
+
+        except asyncio.CancelledError:
+            logging.info(f"Client disconnected for stream {player_id}.")
+        finally:
+            logging.info(f"Closing stream generator for {player_id}.")
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-# --- LOCAL DEVELOPMENT RUNNER ---
+
 if __name__ == "__main__":
     import uvicorn
-
-    # Note: reload=True is great for development but should be False in production.
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

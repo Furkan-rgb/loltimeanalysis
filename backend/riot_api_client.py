@@ -1,6 +1,6 @@
 import httpx
 from datetime import datetime
-import config  # Import our new config file
+import config
 
 HEADERS = {"X-Riot-Token": config.RIOT_API_KEY}
 
@@ -44,7 +44,9 @@ async def get_puuid(
         return data["puuid"]
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
-            raise PlayerNotFound(f"Player {game_name}#{tag_line} not found.") from e
+            raise PlayerNotFound(
+                f"Player {game_name}#{tag_line} not found in region '{platform_id}'."
+            ) from e
         raise  # Re-raise other HTTP errors
 
 

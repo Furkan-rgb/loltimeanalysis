@@ -1,17 +1,21 @@
+# config.py (Simplified)
 import os
 from dotenv import load_dotenv
 
+# This will load the .env file only if the variables are not already set
+# (e.g., by docker-compose). It's safe to run everywhere.
 load_dotenv()
 
 # --- RIOT API ---
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 GAMES_TO_FETCH = 500
-API_REQUEST_DELAY_MS = 1250  # 1.25 seconds
-API_REQUEST_DELAY_SECONDS = API_REQUEST_DELAY_MS / 1000.0
-RATE_LIMIT_LOCK_KEY = "riot_api_rate_limit_lock"
+API_REQUEST_DELAY_SECONDS = 1.25
+API_REQUEST_DELAY_MS = int(API_REQUEST_DELAY_SECONDS * 1000)
 
-# --- REDIS ---
-REDIS_HOST = "localhost"
+# --- REDIS & TEMPORAL ---
+# Provides a default of 'localhost' for local development
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+TEMPORAL_HOST = os.getenv('TEMPORAL_HOST', 'localhost')
 REDIS_PORT = 6379
 REDIS_DB = 0
 
@@ -19,3 +23,6 @@ REDIS_DB = 0
 CACHE_EXPIRATION_SECONDS = 2592000  # 30 days
 COOLDOWN_SECONDS = 120  # 2 minutes
 LOCK_TIMEOUT_SECONDS = 300  # 5 minutes
+
+# --- TEMPORAL TASK QUEUE ---
+TEMPORAL_TASK_QUEUE = "match-history-task-queue"

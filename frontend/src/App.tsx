@@ -1,15 +1,17 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import PlayerHistoryForm from "@/components/profile/PlayerHistoryForm";
 import Dashboard from "@/components/analysis/Dashboard";
 import { Toaster, toast } from "sonner";
-import type { FormData } from "@/types";
+import type { FormData, MatchHistoryResponse } from "@/types";
 
 function App() {
   const params = useParams();
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
-  const [matchHistory, setMatchHistory] = useState(null);
+  const [matchHistory, setMatchHistory] = useState<MatchHistoryResponse | null>(
+    null
+  );
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [cooldown, setCooldown] = useState(0);
@@ -19,14 +21,84 @@ function App() {
     tag: params.tag || "",
   });
 
-  // This ref helps prevent double-fetches in React's StrictMode
   const initialLoadRef = useRef(true);
   const cooldownIntervalRef = useRef<number | null>(null);
+  const activeEventSourceRef = useRef<EventSource | null>(null);
+
+  const createAndListenToEventSource = useCallback(
+    (username: string, tag: string, region: string, isInitialLoad: boolean) => {
+      if (activeEventSourceRef.current) {
+        activeEventSourceRef.current.close();
+      }
+
+      const API_BASE_URL = "http://localhost:8000";
+      const eventSource = new EventSource(
+        `${API_BASE_URL}/stream-status/${username}/${tag}/${region}`
+      );
+      activeEventSourceRef.current = eventSource;
+
+      let hasUpdateStarted = !isInitialLoad;
+
+      eventSource.onmessage = async (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.status === "progress") {
+          if (!hasUpdateStarted) {
+            setIsLoading(true);
+            hasUpdateStarted = true;
+          }
+          if (data.total > 0) {
+            const percentage = Math.round((data.processed / data.total) * 100);
+            setProgress(percentage);
+          }
+        }
+
+        const isTerminalStatus = ["completed", "failed", "no_matches"].includes(
+          data.status
+        );
+
+        if (isTerminalStatus) {
+          eventSource.close();
+          activeEventSourceRef.current = null;
+          setIsLoading(false);
+
+          if (data.status === "completed") {
+            const finalHistoryResponse = await fetch(
+              `${API_BASE_URL}/history/${username}/${tag}/${region}`
+            );
+            const responseJson = await finalHistoryResponse.json();
+            setMatchHistory(responseJson);
+            setProgress(100);
+            if (hasUpdateStarted) {
+              toast.success("History Updated!");
+            }
+          } else {
+            const detailedError =
+              data.error ||
+              "Player not found or they have no recent ranked games.";
+            if (hasUpdateStarted) {
+              toast.error("Search Failed", { description: detailedError });
+              setError(detailedError);
+            }
+          }
+        }
+      };
+
+      eventSource.onerror = () => {
+        eventSource.close();
+        activeEventSourceRef.current = null;
+        if (hasUpdateStarted) {
+          setError("Connection to the server was lost.");
+          setIsLoading(false);
+        }
+      };
+    },
+    []
+  );
 
   useEffect(() => {
     if (!params.region || !params.username || !params.tag) return;
 
-    // Prevent this complex effect from running twice in development
     if (process.env.NODE_ENV === "development" && !initialLoadRef.current) {
       return;
     }
@@ -35,74 +107,55 @@ function App() {
     const { region, username, tag } = params;
     const API_BASE_URL = "http://localhost:8000";
 
-    // Reset state for the new player
     setIsLoading(true);
     setMatchHistory(null);
     setError(null);
     setProgress(0);
 
-    // --- RESTRUCTURED FETCH LOGIC ---
     fetch(`${API_BASE_URL}/history/${username}/${tag}/${region}`)
       .then(async (res) => {
-        // Case 1: Cache HIT! Data exists.
         if (res.ok) {
-          const cachedData = await res.json();
-          setMatchHistory(cachedData);
-          console.log("Loaded from cache:", cachedData);
-          toast.success("History loaded from cache!");
-
-          // Now that data is loaded, "peek" to see if a newer version is being fetched.
-          const peekEventSource = new EventSource(
-            `${API_BASE_URL}/stream-status/${username}/${tag}/${region}`
-          );
-          peekEventSource.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.status === "progress") {
-              // A job is already running, so just start listening.
-              setIsLoading(true);
-              listenToUpdateStream(username, tag, region);
-            } else {
-              setIsLoading(false); // No job running, so we're done.
-            }
-            peekEventSource.close();
-          };
-          peekEventSource.onerror = () => {
-            setIsLoading(false);
-            peekEventSource.close();
-          };
-          return; // Stop execution since we handled this case
-        }
-
-        // Case 2: Cache MISS. Player not found in cache.
-        if (res.status === 404) {
+          const responseJson = await res.json();
+          console.log("Fetched history:", responseJson);
+          setMatchHistory(responseJson);
           setIsLoading(false);
+          toast.success("History loaded from cache!");
           return;
         }
 
-        // Case 3: Other server errors (5xx, etc.)
+        // --- MODIFICATION START ---
+        if (res.status === 404) {
+          setIsLoading(false);
+          // Instead of auto-updating, we now show a message to the user.
+          setError("Player data not found in cache. Click 'Update' to begin.");
+          return;
+        }
+        // --- MODIFICATION END ---
+
         throw new Error("An unexpected server error occurred.");
       })
       .catch((err) => {
         setError(err.message);
         setIsLoading(false);
       });
-  }, [params]);
+
+    return () => {
+      if (activeEventSourceRef.current) {
+        activeEventSourceRef.current.close();
+      }
+    };
+  }, [params, createAndListenToEventSource]);
 
   useEffect(() => {
-    // Clear any existing interval when the component unmounts or cooldown changes
     if (cooldownIntervalRef.current) {
       clearInterval(cooldownIntervalRef.current);
       cooldownIntervalRef.current = null;
     }
-
-    // If there is a cooldown, start a new interval
     if (cooldown > 0) {
       cooldownIntervalRef.current = window.setInterval(() => {
         setCooldown((prevCooldown) => prevCooldown - 1);
       }, 1000);
     }
-
-    // Cleanup function to clear the interval
     return () => {
       if (cooldownIntervalRef.current) {
         clearInterval(cooldownIntervalRef.current);
@@ -110,65 +163,12 @@ function App() {
     };
   }, [cooldown]);
 
-  const listenToUpdateStream = (
-    username: string,
-    tag: string,
-    region: string
-  ) => {
-    const API_BASE_URL = "http://localhost:8000";
-    const eventSource = new EventSource(
-      `${API_BASE_URL}/stream-status/${username}/${tag}/${region}`
-    );
-
-    eventSource.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-
-      if (data.status === "error") {
-        toast.error("Search Failed", {
-          description: data.message,
-        });
-        eventSource.close();
-        setIsLoading(false);
-      }
-
-      if (data.status === "idle_no_data") {
-        toast.error("Search Failed", {
-          description: "Player not found or they have no recent ranked games.",
-        });
-        eventSource.close();
-        setIsLoading(false);
-      }
-
-      if (data.status === "progress" && data.total > 0) {
-        const percentage = Math.round((data.processed / data.total) * 100);
-        setProgress(percentage);
-      }
-
-      if (data.status === "ready") {
-        eventSource.close();
-        const finalHistoryResponse = await fetch(
-          `${API_BASE_URL}/history/${username}/${tag}/${region}`
-        );
-        const historyData = await finalHistoryResponse.json();
-        setMatchHistory(historyData);
-        setIsLoading(false);
-        setProgress(100);
-        toast.success("History Updated!");
-      }
-    };
-
-    eventSource.onerror = () => {
-      eventSource.close();
-      setError("Connection to the server was lost.");
-      setIsLoading(false);
-    };
-  };
-
   const triggerUpdate = () => {
     if (!params.region || !params.username || !params.tag) return;
     const { region, username, tag } = params;
     const API_BASE_URL = "http://localhost:8000";
 
+    toast.info("Starting update...");
     setIsLoading(true);
     setProgress(0);
     setError(null);
@@ -179,71 +179,23 @@ function App() {
     })
       .then(async (response) => {
         if (response.status === 429) {
-          const errorData = await response.json(); // <-- Parse the JSON body
+          const errorData = await response.json();
           const detail = errorData.detail || "";
-          const match = detail.match(/(\d+)/); // <-- Extract numbers from the error string
+          const match = detail.match(/(\d+)/);
           if (match) {
-            setCooldown(parseInt(match[1], 10)); // <-- Set the cooldown timer
+            setCooldown(parseInt(match[1], 10));
           }
-          setIsLoading(false); // <-- Stop loading indicator
-          throw new Error("Cooldown active"); // <-- Stop the promise chain
+          setIsLoading(false);
+          throw new Error("Cooldown active");
         }
         if (!response.ok) throw new Error("Failed to trigger update.");
 
-        const eventSource = new EventSource(
-          `${API_BASE_URL}/stream-status/${username}/${tag}/${region}`
-        );
-
-        eventSource.onmessage = async (event) => {
-          const data = JSON.parse(event.data);
-
-          if (data.status === "error") {
-            toast.error("Search Failed", {
-              description: data.message,
-            });
-            eventSource.close();
-            setIsLoading(false);
-          }
-
-          if (data.status === "idle_no_data") {
-            toast.error("Search Failed", {
-              description:
-                "Player not found or they have no recent ranked games.",
-            });
-            eventSource.close();
-            setIsLoading(false);
-          }
-
-          if (data.status === "progress" && data.total > 0) {
-            const percentage = Math.round((data.processed / data.total) * 100);
-            setProgress(percentage);
-          }
-
-          if (data.status === "ready") {
-            eventSource.close();
-            const finalHistoryResponse = await fetch(
-              `${API_BASE_URL}/history/${username}/${tag}/${region}`
-            );
-            const historyData = await finalHistoryResponse.json();
-            setMatchHistory(historyData);
-            setIsLoading(false);
-            setProgress(100);
-            toast.success("History Updated!");
-          }
-        };
-
-        eventSource.onerror = () => {
-          eventSource.close();
-          setError("Connection to the server was lost.");
-          setIsLoading(false);
-        };
+        createAndListenToEventSource(username, tag, region, false);
       })
       .catch((err) => {
-        // Only set an error message if it's NOT a cooldown signal.
         if (err.message !== "Cooldown active") {
           setError("Failed to trigger an update: " + err.message);
         }
-        // Always stop the loading indicator on any error.
         setIsLoading(false);
       });
   };
@@ -253,7 +205,6 @@ function App() {
     username: string;
     tag: string;
   }) => {
-    // Reset the ref for the new navigation
     initialLoadRef.current = true;
     navigate(`/player/${data.region}/${data.username}/${data.tag}`);
   };

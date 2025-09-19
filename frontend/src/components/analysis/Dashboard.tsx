@@ -2174,14 +2174,14 @@ const TimeOfDayClusteringChart: React.FC<{
   }, [cellStats, clusters]);
 
   const colors = [
-    "hsl(var(--chart-1))",
-    "hsl(var(--chart-2))",
-    "hsl(var(--chart-3))",
-    "hsl(var(--chart-4))",
-    "hsl(var(--chart-5))",
-    "hsl(var(--primary))",
-    "hsl(var(--muted-foreground))",
-    "hsl(var(--accent))",
+    "var(--chart-1)",
+    "var(--chart-2)",
+    "var(--chart-3)",
+    "var(--chart-4)",
+    "var(--chart-5)",
+    "var(--primary)",
+    "var(--muted-foreground)",
+    "var(--accent)",
   ];
 
   const chartConfig: ChartConfig = {
@@ -2332,14 +2332,17 @@ const TimeOfDayClusteringChart: React.FC<{
               fill={colors[idx]}
             />
           ))}
-          <Scatter
-            name="Centroids"
-            data={centroidInfo}
-            fill="black"
-            stroke="white"
-          >
-            <LabelList dataKey="label" position="top" offset={8} />
-          </Scatter>
+          {centroidInfo.map((c) => (
+            <Scatter
+              key={`centroid-${c.cluster}`}
+              name={`Centroid ${c.cluster + 1}`}
+              data={[c]}
+              fill={colors[c.cluster] ?? "var(--primary)"}
+              stroke="white"
+            >
+              <LabelList dataKey="label" position="top" offset={8} />
+            </Scatter>
+          ))}
         </ScatterChart>
       </ChartContainer>
 

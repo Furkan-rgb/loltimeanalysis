@@ -1,3 +1,50 @@
+export type State = {
+  // The current status of the UI, representing our state machine
+  status: "idle" | "loading" | "updating" | "success" | "error" | "cooldown";
+  formData: FormData;
+  matchHistory: MatchHistoryResponse | null;
+  progress: number;
+  error: string | null;
+  cooldown: number;
+};
+
+// A discriminated union of all possible actions that can be dispatched
+export type Action =
+  | { type: "FORM_CHANGE"; payload: { field: keyof FormData; value: string } }
+  | { type: "SEARCH"; payload: FormData }
+  | { type: "UPDATE" }
+  | { type: "FETCH_SUCCESS"; payload: MatchHistoryResponse }
+  | { type: "STREAM_PROGRESS"; payload: { processed: number; total: number } }
+  | { type: "STREAM_SUCCESS"; payload: MatchHistoryResponse }
+  | { type: "STREAM_FAILURE"; payload: string }
+  | { type: "SET_COOLDOWN"; payload: number }
+  | { type: "DECREMENT_COOLDOWN" }
+  | { type: "RESET" };
+
+export type PlayerUrlParams = {
+  region?: string;
+  username?: string;
+  tag?: string;
+};
+
+export type FormData = {
+  region: string;
+  username: string;
+  tag: string;
+};
+
+export type PlayerHistoryFormProps = {
+  onSearch: (data: FormData) => void;
+  onUpdate: () => void;
+  isLoading: boolean;
+  progress: number;
+  cooldown: number;
+  formData: FormData;
+  onFormChange: (field: keyof FormData, value: string) => void;
+  urlParams: PlayerUrlParams;
+  isUpdating: boolean;
+};
+
 // This defines the state when the job is running
 export interface ProgressState {
   status: "progress";
@@ -27,12 +74,6 @@ export type WorkflowStatus =
   | CompletedState
   | FailedState
   | NoMatchesState;
-
-export type FormData = {
-  region: string;
-  username: string;
-  tag: string;
-};
 
 export interface MatchData {
   match_id: string;

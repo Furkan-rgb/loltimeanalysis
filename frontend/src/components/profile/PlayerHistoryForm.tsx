@@ -1,4 +1,4 @@
-import { type FormEvent } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,53 +14,52 @@ import {
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
-import { type useParams } from "react-router-dom";
-
-// Define a type for our form data
-type FormData = {
-  region: string;
-  username: string;
-  tag: string;
-};
-
-// Define the component's props
-type PlayerHistoryFormProps = {
-  onSearch: (data: FormData) => void;
-  onUpdate: () => void;
-  isLoading: boolean;
-  isDataLoaded: boolean;
-  progress: number;
-  cooldown: number;
-  formData: FormData;
-  onFormChange: (field: keyof FormData, value: string) => void;
-  urlParams: ReturnType<typeof useParams>;
-};
+import type { PlayerHistoryFormProps } from "@/types";
 
 export function PlayerHistoryForm({
   onSearch,
   onUpdate,
   isLoading,
-  isDataLoaded,
   progress,
   cooldown,
   formData,
   onFormChange,
   urlParams,
+  isUpdating,
 }: PlayerHistoryFormProps) {
+  const isNewSearch = useMemo(
+    () =>
+      formData.region !== urlParams.region ||
+      formData.username !== urlParams.username ||
+      formData.tag !== urlParams.tag,
+    [formData, urlParams]
+  );
+
+  const [errors, setErrors] = useState({
+    region: false,
+    username: false,
+    tag: false,
+  });
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (!formData.region || !formData.username || !formData.tag) {
+
+    const newErrors = {
+      region: !formData.region,
+      username: !formData.username,
+      tag: !formData.tag,
+    };
+
+    setErrors(newErrors);
+
+    const isInvalid = Object.values(newErrors).some((error) => error);
+
+    if (isInvalid) {
       toast.error("Validation Error", {
         description: "Please fill out all fields before submitting.",
       });
       return;
     }
-
-    // Check if the form's current data differs from the data in the URL
-    const isNewSearch =
-      formData.region !== urlParams.region ||
-      formData.username !== urlParams.username ||
-      formData.tag !== urlParams.tag;
 
     if (isNewSearch) {
       onSearch(formData);
@@ -69,23 +68,27 @@ export function PlayerHistoryForm({
     }
   };
 
-  // Helper to determine the correct button text based on the app's state
+  const handleInputChange = (
+    field: keyof PlayerHistoryFormProps["formData"],
+    value: string
+  ) => {
+    // 1. Propagate the change to the parent component
+    onFormChange(field, value);
+
+    // 2. Clear the error for this field if it has a value
+    if (value) {
+      setErrors((prevErrors) => ({ ...prevErrors, [field]: false }));
+    }
+  };
+
   const getButtonText = () => {
-    // 1. Cooldown and loading states have top priority.
     if (cooldown > 0) return `Cooldown (${cooldown}s)`;
     if (isLoading) return "Fetching...";
 
-    // 2. Check if the form's current data differs from the data in the URL.
-    const isNewSearch =
-      formData.region !== urlParams.region ||
-      formData.username !== urlParams.username ||
-      formData.tag !== urlParams.tag;
-
-    // 3. The button text should directly reflect the action that will be taken.
     if (isNewSearch) {
-      return "Fetch History"; // If it's a new search, the action is to fetch.
+      return "Fetch History";
     } else {
-      return "Update"; // Otherwise, the action is to update the current player.
+      return "Update";
     }
   };
 
@@ -99,12 +102,16 @@ export function PlayerHistoryForm({
           <div className="flex rounded-md shadow-sm">
             <Select
               value={formData.region}
-              onValueChange={(value) => onFormChange("region", value)}
+              onValueChange={(value) => handleInputChange("region", value)} // Use new handler
               disabled={isLoading}
             >
               <SelectTrigger
                 id="region"
-                className="w-28 rounded-r-none focus:ring-0"
+                className={`w-28 rounded-r-none focus:ring-0 ${
+                  errors.region
+                    ? "border-destructive ring-1 ring-destructive"
+                    : ""
+                }`} // Apply conditional class
                 aria-label="Select region"
               >
                 <SelectValue placeholder="Region" />
@@ -125,8 +132,12 @@ export function PlayerHistoryForm({
                 id="username"
                 placeholder="Riot ID"
                 value={formData.username}
-                onChange={(e) => onFormChange("username", e.target.value)}
-                className="rounded-l-none border-l-0 pl-3 pr-16 focus:ring-0"
+                onChange={(e) => handleInputChange("username", e.target.value)} // Use new handler
+                className={`rounded-l-none border-l-0 pl-3 pr-16 focus:ring-0 ${
+                  errors.username
+                    ? "border-destructive ring-1 ring-destructive"
+                    : ""
+                }`} // Apply conditional class
                 disabled={isLoading}
               />
               <div className="absolute inset-y-0 right-0 flex items-center">
@@ -134,9 +145,13 @@ export function PlayerHistoryForm({
                 <Input
                   id="tag"
                   placeholder="Tag"
-                  className="w-16 border-0 bg-transparent p-0 text-center focus:ring-0"
+                  className={`w-16 border-0 bg-transparent p-0 text-center focus:ring-0 ${
+                    errors.tag
+                      ? "border-destructive ring-1 ring-destructive"
+                      : ""
+                  }`} // Apply conditional class
                   value={formData.tag}
-                  onChange={(e) => onFormChange("tag", e.target.value)}
+                  onChange={(e) => handleInputChange("tag", e.target.value)} // Use new handler
                   disabled={isLoading}
                 />
               </div>
@@ -150,7 +165,7 @@ export function PlayerHistoryForm({
           </Button>
         </div>
       </form>
-      {isLoading && (
+      {isUpdating && (
         <div className="mt-2">
           <Progress value={progress} />
         </div>

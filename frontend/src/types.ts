@@ -41,6 +41,7 @@ export type PlayerHistoryFormProps = {
   progress: number;
   cooldown: number;
   formData: FormData;
+  isDataLoaded: boolean;
   onFormChange: (field: keyof FormData, value: string) => void;
   urlParams: PlayerUrlParams;
   isUpdating: boolean;

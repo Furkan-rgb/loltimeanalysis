@@ -25,6 +25,7 @@ export function PlayerHistoryForm({
   formData,
   onFormChange,
   urlParams,
+  isDataLoaded,
   isUpdating,
 }: PlayerHistoryFormProps) {
   const isNewSearch = useMemo(
@@ -61,7 +62,7 @@ export function PlayerHistoryForm({
       return;
     }
 
-    if (isNewSearch) {
+    if (isNewSearch || !isDataLoaded) {
       onSearch(formData);
     } else {
       onUpdate();
@@ -85,7 +86,7 @@ export function PlayerHistoryForm({
     if (cooldown > 0) return `Cooldown (${cooldown}s)`;
     if (isLoading) return "Fetching...";
 
-    if (isNewSearch) {
+    if (isNewSearch || !isDataLoaded) {
       return "Fetch History";
     } else {
       return "Update";

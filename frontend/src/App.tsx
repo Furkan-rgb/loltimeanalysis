@@ -196,38 +196,38 @@ function App() {
     }
 
     dispatch({ type: "SEARCH", payload: { region, username, tag } });
-    createAndListenToEventSource(username, tag, region);
 
+    // Start the initial validation and cache check
     fetch(`${API_BASE_URL}/history/${username}/${tag}/${region}`)
       .then(async (res) => {
-        // --- NEW LOGIC ---
         if (res.status === 404) {
           const errorDetail = (await res.json()).detail;
           dispatch({ type: "PLAYER_NOT_FOUND", payload: errorDetail });
-          return; // Stop further processing
-        }
-        if (res.status === 204) {
-          // Player is valid, no cache. Do nothing and let the stream handle it.
           return;
         }
+
+        // THIS IS THE FIX: Only start the listener after confirming an update is happening.
+        if (res.status === 204) {
+          createAndListenToEventSource(username, tag, region);
+          return;
+        }
+
         if (res.ok) {
           const responseJson = await res.json();
           dispatch({ type: "FETCH_SUCCESS", payload: responseJson });
-          if (!activeEventSourceRef.current)
-            toast.success("History loaded from cache!");
+          toast.success("History loaded from cache!");
         } else {
-          // Handle other potential server errors
           throw new Error(`Server responded with status: ${res.status}`);
         }
       })
       .catch((err) => {
-        // Ensure we don't dispatch an error if a 404 was already handled
+        // Avoids dispatching an error for empty 204 responses
         if (err.name !== "SyntaxError") {
-          // Catches JSON parsing errors on 204
           dispatch({ type: "STREAM_FAILURE", payload: err.message });
         }
       });
 
+    // Cleanup function remains the same
     return () => {
       if (activeEventSourceRef.current) {
         activeEventSourceRef.current.close();
@@ -268,6 +268,7 @@ function App() {
               isLoading={isLoading || isUpdating || status === "cooldown"}
               isUpdating={isUpdating}
               progress={progress}
+              isDataLoaded={!!matchHistory}
               cooldown={cooldown}
               formData={formData}
               onFormChange={handleFormChange}

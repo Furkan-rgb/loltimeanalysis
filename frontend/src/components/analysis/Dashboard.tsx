@@ -119,12 +119,22 @@ const calculateSmoothedWinRate = (
 };
 
 const getHeatmapColor = (winRate: number, totalGames: number): string => {
-  if (totalGames === 0) return "bg-gray-100";
-  if (winRate > 65) return "bg-green-500";
-  if (winRate > 55) return "bg-green-400";
-  if (winRate > 45) return "bg-yellow-300";
-  if (winRate > 35) return "bg-red-400";
-  return "bg-red-500";
+  if (totalGames === 0) return "bg-gray-100 dark:bg-gray-100/10";
+  if (winRate > 65) return "bg-green-500 dark:bg-green-500/80";
+  if (winRate > 55) return "bg-green-400 dark:bg-green-400/80";
+  if (winRate > 45) return "bg-yellow-300 dark:bg-yellow-300/80";
+  if (winRate > 35) return "bg-red-400 dark:bg-red-400/80";
+  // Assuming a default for win rates below 35
+  return "bg-red-500 dark:bg-red-500/80";
+};
+
+const getHeatmapFillColor = (winRate: number, totalGames: number): string => {
+  if (totalGames === 0) return "var(--muted)";
+  if (winRate > 65) return "var(--chart-2)";
+  if (winRate > 55) return "var(--chart-4)";
+  if (winRate > 45) return "var(--chart-5)";
+  if (winRate > 35) return "var(--chart-1)";
+  return "var(--destructive)";
 };
 
 // --- Reusable Chart Tooltip ---
@@ -1379,9 +1389,9 @@ const ChampionPerformanceQuadrant: React.FC<
       <text
         {...chosen.textProps}
         fontSize={fontSize}
-        fill="#111827"
-        stroke="#ffffff"
-        strokeWidth={3}
+        fill="var(--foreground)" // USE a theme variable for text color
+        stroke="var(--background)" // USE a theme variable for the outline
+        strokeWidth={2}
         style={{ paintOrder: "stroke fill" }}
       >
         {value}
@@ -1485,7 +1495,7 @@ const ChampionPerformanceQuadrant: React.FC<
             <RechartsLabel
               value="Comfort Picks"
               position="center"
-              fill="hsl(var(--muted-foreground))"
+              fill="var(--muted-foreground)"
               fontSize={12}
             />
           </ReferenceDot>
@@ -1493,7 +1503,7 @@ const ChampionPerformanceQuadrant: React.FC<
             <RechartsLabel
               value="Hidden Gems"
               position="center"
-              fill="hsl(var(--muted-foreground))"
+              fill="var(--muted-foreground)"
               fontSize={12}
             />
           </ReferenceDot>
@@ -1506,7 +1516,7 @@ const ChampionPerformanceQuadrant: React.FC<
             <RechartsLabel
               value="The Grind"
               position="center"
-              fill="hsl(var(--muted-foreground))"
+              fill="var(--muted-foreground)"
               fontSize={12}
             />
           </ReferenceDot>
@@ -1514,7 +1524,7 @@ const ChampionPerformanceQuadrant: React.FC<
             <RechartsLabel
               value="Learning Curve"
               position="center"
-              fill="hsl(var(--muted-foreground))"
+              fill="var(--muted-foreground)"
               fontSize={12}
             />
           </ReferenceDot>
@@ -1522,19 +1532,19 @@ const ChampionPerformanceQuadrant: React.FC<
           {/* Reference Lines on top of areas */}
           <ReferenceLine
             y={50}
-            stroke="hsl(var(--muted-foreground))"
+            stroke="var(--muted-foreground)"
             strokeDasharray="3 3"
           />
           <ReferenceLine
             x={avgPlayRate}
-            stroke="hsl(var(--muted-foreground))"
+            stroke="var(--muted-foreground)"
             strokeDasharray="3 3"
           >
             <RechartsLabel
               value="Avg Games"
               position="insideTopRight"
               offset={10}
-              fill="hsl(var(--muted-foreground))"
+              fill="var(--muted-foreground)"
               fontSize={12}
             />
           </ReferenceLine>
@@ -1545,8 +1555,7 @@ const ChampionPerformanceQuadrant: React.FC<
             {quadrantData.map((entry, index) => (
               <Cell
                 key={`cell-${index}`}
-                // MODIFICATION: Using the updated function
-                fill={getHeatmapColor(entry.winRate, entry.playRate)}
+                fill={getHeatmapFillColor(entry.winRate, entry.playRate)}
               />
             ))}
           </Scatter>
@@ -1877,7 +1886,7 @@ const TimeOfDayHeatmap: React.FC<{
               return (
                 <div key={`${day}-${block.name}`} className="flex-1 h-10 p-0.5">
                   <div
-                    className={`w-full h-full rounded flex items-center justify-center text-white font-bold ${getHeatmapColor(
+                    className={`w-full h-full rounded flex items-center justify-center text-white dark:text-gray-200 font-bold ${getHeatmapColor(
                       adjustedWinRate,
                       cellStats.total
                     )}`}

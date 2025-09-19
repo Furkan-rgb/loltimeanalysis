@@ -9,14 +9,16 @@ from contextlib import asynccontextmanager
 from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.exceptions import WorkflowAlreadyStartedError
 import redis
+import httpx
 from schemas import ProgressState, CompletedState, FailedState, NoMatchesState
-from fastapi import status
+from fastapi import status, Response
 from temporalio.api.enums.v1 import TaskQueueType
 import time
 import config
 import redis_service
 import key_service
 from temporal_workflows import FetchMatchHistoryWorkflow
+import riot_api_client
 
 # --- APP INITIALIZATION ---
 temporal_client: Client | None = None
@@ -136,13 +138,29 @@ async def health_check(r: redis.Redis = Depends(get_redis)):
 
 
 @app.get("/history/{game_name}/{tag_line}/{region}")
-def get_history(game_name: str, tag_line: str, region: str, r: redis.Redis = Depends(get_redis)):
+async def get_history(game_name: str, tag_line: str, region: str, r: redis.Redis = Depends(get_redis)):
+    """
+    Checks for cached match history. If not found, validates player existence.
+    - Returns 200 OK with data if cached.
+    - Returns 204 No Content if the player is valid but has no cache.
+    - Returns 404 Not Found if the player does not exist.
+    """
     player_id = key_service.get_player_id(game_name, tag_line, region)
     cache_key = key_service.get_cache_key(player_id)
-    # Correctly pass the redis client 'r' to the function
+
     if cached_data := redis_service.get_from_cache(r, cache_key):
         return {"status": "cached", "data": cached_data}
-    raise HTTPException(status_code=404, detail="No match history found.")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            await riot_api_client.validate_player_in_region_async(client, game_name, tag_line, region)
+        
+        return Response(status_code=204)
+
+    except riot_api_client.PlayerNotFound as e:
+        # This will now catch both "player doesn't exist" and "player not in this region"
+        raise HTTPException(status_code=404, detail=str(e))
+
 
 @app.post("/update/{game_name}/{tag_line}/{region}")
 async def trigger_update_job(game_name: str, tag_line: str, region: str, r: redis.Redis = Depends(get_redis)):

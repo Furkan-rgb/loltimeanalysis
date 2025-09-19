@@ -19,6 +19,7 @@ export type Action =
   | { type: "STREAM_FAILURE"; payload: string }
   | { type: "SET_COOLDOWN"; payload: number }
   | { type: "DECREMENT_COOLDOWN" }
+  | { type: "PLAYER_NOT_FOUND"; payload: string }
   | { type: "RESET" };
 
 export type PlayerUrlParams = {

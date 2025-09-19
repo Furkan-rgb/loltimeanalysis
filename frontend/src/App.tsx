@@ -74,6 +74,14 @@ function reducer(state: State, action: Action): State {
         cooldown: newCooldown,
         status: newCooldown > 0 ? "cooldown" : "success", // Revert to success when cooldown ends
       };
+    case "PLAYER_NOT_FOUND":
+      toast.error("Player Not Found", { description: action.payload });
+      return {
+        ...state,
+        status: "error",
+        error: action.payload,
+        matchHistory: null, // Ensure no old data is shown
+      };
     case "RESET":
       return { ...initialState };
     default:
@@ -98,6 +106,11 @@ function App() {
   const activeEventSourceRef = useRef<EventSource | null>(null);
   const API_BASE_URL =
     (import.meta as any).env.VITE_API_BASE_URL || "http://localhost:8000";
+  const handleSearch = (data: FormData) =>
+    navigate(`/player/${data.region}/${data.username}/${data.tag}`);
+  const handleFormChange = (field: keyof FormData, value: string) =>
+    dispatch({ type: "FORM_CHANGE", payload: { field, value } });
+  const resetApp = useCallback(() => navigate("/"), [navigate]);
 
   const createAndListenToEventSource = useCallback(
     (username: string, tag: string, region: string) => {
@@ -144,49 +157,6 @@ function App() {
     [API_BASE_URL]
   );
 
-  useEffect(() => {
-    const { region, username, tag } = params;
-    if (!region || !username || !tag) {
-      dispatch({ type: "RESET" });
-      return;
-    }
-
-    dispatch({ type: "SEARCH", payload: { region, username, tag } });
-    createAndListenToEventSource(username, tag, region);
-
-    fetch(`${API_BASE_URL}/history/${username}/${tag}/${region}`)
-      .then(async (res) => {
-        if (res.ok) {
-          const responseJson = await res.json();
-          dispatch({ type: "FETCH_SUCCESS", payload: responseJson });
-          if (!activeEventSourceRef.current)
-            toast.success("History loaded from cache!");
-        }
-      })
-      .catch((err) =>
-        dispatch({
-          type: "STREAM_FAILURE",
-          payload: "Failed to fetch cached history.",
-        })
-      );
-
-    return () => {
-      if (activeEventSourceRef.current) {
-        activeEventSourceRef.current.close();
-        activeEventSourceRef.current = null;
-      }
-    };
-  }, [params, createAndListenToEventSource, API_BASE_URL]);
-
-  useEffect(() => {
-    if (cooldown > 0) {
-      const timer = setTimeout(() => {
-        dispatch({ type: "DECREMENT_COOLDOWN" });
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [cooldown]);
-
   const triggerUpdate = () => {
     if (!params.region || !params.username || !params.tag) return;
     const { region, username, tag } = params;
@@ -218,15 +188,66 @@ function App() {
       });
   };
 
-  const handleSearch = (data: FormData) =>
-    navigate(`/player/${data.region}/${data.username}/${data.tag}`);
-  const handleFormChange = (field: keyof FormData, value: string) =>
-    dispatch({ type: "FORM_CHANGE", payload: { field, value } });
-  const resetApp = useCallback(() => navigate("/"), [navigate]);
+  useEffect(() => {
+    const { region, username, tag } = params;
+    if (!region || !username || !tag) {
+      dispatch({ type: "RESET" });
+      return;
+    }
+
+    dispatch({ type: "SEARCH", payload: { region, username, tag } });
+    createAndListenToEventSource(username, tag, region);
+
+    fetch(`${API_BASE_URL}/history/${username}/${tag}/${region}`)
+      .then(async (res) => {
+        // --- NEW LOGIC ---
+        if (res.status === 404) {
+          const errorDetail = (await res.json()).detail;
+          dispatch({ type: "PLAYER_NOT_FOUND", payload: errorDetail });
+          return; // Stop further processing
+        }
+        if (res.status === 204) {
+          // Player is valid, no cache. Do nothing and let the stream handle it.
+          return;
+        }
+        if (res.ok) {
+          const responseJson = await res.json();
+          dispatch({ type: "FETCH_SUCCESS", payload: responseJson });
+          if (!activeEventSourceRef.current)
+            toast.success("History loaded from cache!");
+        } else {
+          // Handle other potential server errors
+          throw new Error(`Server responded with status: ${res.status}`);
+        }
+      })
+      .catch((err) => {
+        // Ensure we don't dispatch an error if a 404 was already handled
+        if (err.name !== "SyntaxError") {
+          // Catches JSON parsing errors on 204
+          dispatch({ type: "STREAM_FAILURE", payload: err.message });
+        }
+      });
+
+    return () => {
+      if (activeEventSourceRef.current) {
+        activeEventSourceRef.current.close();
+        activeEventSourceRef.current = null;
+      }
+    };
+  }, [params, createAndListenToEventSource, API_BASE_URL]);
+
+  useEffect(() => {
+    if (cooldown > 0) {
+      const timer = setTimeout(() => {
+        dispatch({ type: "DECREMENT_COOLDOWN" });
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [cooldown]);
 
   return (
     <>
-      <Toaster position="top-right" duration={2000} />
+      <Toaster position="top-right" duration={3000} />
       <header>
         <div className="container mx-auto p-4 pt-8">
           <div className="mx-auto max-w-3xl">
@@ -240,12 +261,6 @@ function App() {
               <p className="text-muted-foreground">
                 An analytical look at your recent performance.
               </p>
-              {error && status === "error" && (
-                <div className="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
-                  <strong className="font-medium">Error:</strong>{" "}
-                  <span className="ml-2">{error}</span>
-                </div>
-              )}
             </header>
             <PlayerHistoryForm
               onSearch={handleSearch}

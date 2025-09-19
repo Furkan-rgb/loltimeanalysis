@@ -11,8 +11,44 @@ REGION_TO_ROUTE_MAP = {
     "kr": "asia",
     "br": "americas",
 }
+PLATFORM_ID_MAP = {
+    "na": "na1", "br": "br1",
+    "euw": "euw1", "eune": "eun1",
+    "kr": "kr", "jp": "jp1",
+    # Add other platforms as needed based on what you support
+}
 
+async def validate_player_in_region_async(
+    client: httpx.AsyncClient, game_name: str, tag_line: str, region: str
+) -> str:
+    """
+    Validates a player exists globally (by Riot ID) and has a summoner
+    profile in the specified region.
+    """
+    # Step 1: Find the player's global account to get their PUUID.
+    # The 'region' here is just for routing the initial request.
+    puuid = await get_puuid(client, game_name, tag_line, region)
 
+    # Step 2: Verify that a summoner profile exists for that PUUID in the SPECIFIC region.
+    try:
+        platform_id = PLATFORM_ID_MAP.get(region.lower())
+        if not platform_id:
+            raise PlayerNotFound(f"Region '{region}' does not have a configured platform for summoner lookups.")
+
+        summoner_url = f"https://{platform_id}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}"
+        response = await client.get(summoner_url, headers=HEADERS)
+        response.raise_for_status()
+        
+        # If both checks pass, return the PUUID
+        return puuid
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            # This is the key: The player is real, but not on this server.
+            raise PlayerNotFound(
+                f"Player {game_name}#{tag_line} exists, but not in the selected region '{region.upper()}'."
+            ) from e
+        raise # Re-raise other HTTP errors
+    
 def get_regional_route(region: str) -> str:
     """
     Converts a simple region string (e.g., 'na') to its regional route.

@@ -118,3 +118,15 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Ensure the page and root container fill the viewport so footer can be pinned to bottom */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* Prefer the app container to be full-height when using flex layouts */
+.app-root {
+  min-height: 100%;
+}

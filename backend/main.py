@@ -147,9 +147,13 @@ async def get_history(game_name: str, tag_line: str, region: str, r: redis.Redis
     """
     player_id = key_service.get_player_id(game_name, tag_line, region)
     cache_key = key_service.get_cache_key(player_id)
+    lock_key = key_service.get_lock_key(player_id)
 
     if cached_data := redis_service.get_from_cache(r, cache_key):
-        return {"status": "cached", "data": cached_data}
+        # Also indicate if an update is currently in progress for this player so clients
+        # can automatically attach to the SSE stream and show live progress.
+        in_progress = bool(r.exists(lock_key))
+        return {"status": "cached", "data": cached_data, "in_progress": in_progress}
 
     try:
         async with httpx.AsyncClient() as client:
@@ -166,14 +170,28 @@ async def get_history(game_name: str, tag_line: str, region: str, r: redis.Redis
 async def trigger_update_job(game_name: str, tag_line: str, region: str, r: redis.Redis = Depends(get_redis)):
     player_id = key_service.get_player_id(game_name, tag_line, region)
     cooldown_key = key_service.get_cooldown_key(player_id)
+    lock_key = key_service.get_lock_key(player_id)
 
-    # Correctly pass the redis client 'r'
-    if (ttl := redis_service.get_cooldown_ttl(r, cooldown_key)) > 0:
-        raise HTTPException(status_code=429, detail=f"Please try again in {ttl} seconds.")
-    
-    # Set cooldown BEFORE starting workflow to prevent race conditions
-    redis_service.set_cooldown(r, cooldown_key)
+    # If a cooldown is active and no update is currently running, refuse.
+    # But if there's an in-progress lock, allow attaching to that update (don't return 429).
+    if (ttl := redis_service.get_cooldown_ttl(r, cooldown_key)) > 0 and not r.exists(lock_key):
+        # Return a structured response so clients can reliably parse cooldown and in-progress state.
+        # We'll use HTTPException with a JSON-able detail.
+        raise HTTPException(status_code=429, detail={
+            "message": f"Please try again in {ttl} seconds.",
+            "cooldown_seconds": ttl,
+            "in_progress": False,
+        })
 
+    # Try to acquire an in-progress lock before starting the workflow. This prevents
+    # multiple concurrent starts for the same player. The worker will release the lock
+    # and set the cooldown when it finishes.
+    acquired = redis_service.acquire_lock(r, lock_key, lock_timeout_seconds=config.LOCK_TIMEOUT_SECONDS)
+    if not acquired:
+        # Another update is already in progress. Let the caller know so they can attach via SSE.
+        return {"status": "in_progress"}
+
+    # We acquired the lock; now try to start the workflow. If starting fails, release the lock.
     try:
         await temporal_client.start_workflow(
             FetchMatchHistoryWorkflow.run,
@@ -183,10 +201,19 @@ async def trigger_update_job(game_name: str, tag_line: str, region: str, r: redi
         )
         return {"status": "started"}
     except WorkflowAlreadyStartedError:
+        # The workflow was already started by another concurrent request. Release our lock
+        # to avoid leaving it set and return in_progress so clients can attach to SSE.
+        try:
+            redis_service.release_lock(r, lock_key)
+        except Exception:
+            pass
         return {"status": "in_progress"}
     except Exception as e:
-        # If workflow fails to start, we should ideally clear the cooldown
-        # For simplicity, we'll leave it, but in production you might remove it.
+        # If workflow fails to start, release the lock so subsequent attempts can proceed.
+        try:
+            redis_service.release_lock(r, lock_key)
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/stream-status/{game_name}/{tag_line}/{region}")

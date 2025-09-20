@@ -18,16 +18,27 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          # Tell the cache where to find the lock file
           cache-dependency-path: frontend/package-lock.json
 
+      # --- NEW DIAGNOSTIC STEP ---
+      - name: Debug File Structure and Configs
+        working-directory: ./frontend
+        run: |
+          echo "--- Listing all files recursively ---"
+          ls -R
+          echo ""
+          echo "--- Contents of tsconfig.json ---"
+          cat tsconfig.json
+          echo ""
+          echo "--- Contents of tsconfig.app.json ---"
+          cat tsconfig.app.json
+          echo ""
+
       - name: Install Dependencies
-        # Run npm install from inside the frontend directory
         working-directory: ./frontend
         run: npm install
 
       - name: Build Project
-        # Run the build from inside the frontend directory
         working-directory: ./frontend
         run: npm run build
 
@@ -37,6 +48,5 @@ jobs:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
-          # The source path is now frontend/dist/
           source: "frontend/dist/"
           target: "/var/www/yourdomain.com/html"

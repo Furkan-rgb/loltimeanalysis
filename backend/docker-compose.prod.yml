@@ -2,6 +2,8 @@ services:
   api:
     # We remove the volume so the container uses the code copied by the Dockerfile.
     volumes: []
+    environment:
+      - CORS_ORIGINS=${CORS_ORIGINS}
     # We remove --reload for production efficiency.
     command: uvicorn main:app --host 0.0.0.0 --port 8000
 

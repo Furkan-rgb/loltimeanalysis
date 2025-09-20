@@ -78,7 +78,6 @@ def get_redis() -> redis.Redis:
 # --- MIDDLEWARE ---
 origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173")
 origins = [origin.strip() for origin in origins_str.split(",")]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

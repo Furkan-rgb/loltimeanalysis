@@ -106,7 +106,7 @@ function App() {
   const isUpdating = status === "updating";
   const activeEventSourceRef = useRef<EventSource | null>(null);
   const API_BASE_URL =
-    (import.meta as any).env.VITE_API_BASE_URL || "http://142.93.231.169:8000";
+    (import.meta as any).env.VITE_API_BASE_URL || "http://localhost:8000";
   const handleSearch = (data: FormData) =>
     navigate(`/player/${data.region}/${data.username}/${data.tag}`);
   const handleFormChange = (field: keyof FormData, value: string) =>

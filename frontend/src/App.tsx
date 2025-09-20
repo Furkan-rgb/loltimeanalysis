@@ -265,7 +265,6 @@ function App() {
           dispatch({ type: "PLAYER_FOUND_NO_HISTORY" });
           // Even though there's no cache, there might be an in-progress update
           // started by another client; attach to the SSE stream to show progress.
-          toast("No cache — listening for an in-progress update (if any)...");
           createAndListenToEventSource(username, tag, region);
           return;
         }

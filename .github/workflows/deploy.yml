@@ -1,0 +1,23 @@
+name: Deploy to DigitalOcean
+
+# This workflow runs on every push to the 'main' branch
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # This action simplifies running commands on a remote server over SSH
+      - name: SSH and Deploy
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            cd ~/loltimeanalysis/backend
+            git pull
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build

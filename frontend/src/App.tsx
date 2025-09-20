@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import PlayerHistoryForm from "@/components/profile/PlayerHistoryForm";
 import Dashboard from "@/components/analysis/Dashboard";
 import { Toaster, toast } from "sonner";
-import type { FormData, MatchHistoryResponse, State, Action } from "@/types";
+import type { FormData, State, Action } from "@/types";
 import { Footer } from "./components/Footer";
 
 // The initial state of our application
@@ -101,7 +101,7 @@ function App() {
       tag: params.tag || "",
     },
   });
-  const { status, formData, matchHistory, progress, error, cooldown } = state;
+  const { status, formData, matchHistory, progress, cooldown } = state;
   const isLoading = status === "loading";
   const isUpdating = status === "updating";
   const activeEventSourceRef = useRef<EventSource | null>(null);

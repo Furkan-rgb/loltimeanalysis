@@ -1,3 +1,4 @@
+import os
 import sys
 import json
 import asyncio
@@ -75,9 +76,16 @@ def get_redis() -> redis.Redis:
     return redis_client
 
 # --- MIDDLEWARE ---
-origins = ["http://localhost", "http://localhost:8080", "http://localhost:5173"]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173")
+origins = [origin.strip() for origin in origins_str.split(",")]
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- ENDPOINTS ---
 @app.get("/health", status_code=status.HTTP_200_OK)

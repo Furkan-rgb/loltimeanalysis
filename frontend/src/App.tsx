@@ -216,7 +216,7 @@ function App() {
         if (res.ok) {
           const responseJson = await res.json();
           dispatch({ type: "FETCH_SUCCESS", payload: responseJson });
-          toast.success("History loaded from cache!");
+          toast.success("Match history loaded!");
         } else {
           throw new Error(`Server responded with status: ${res.status}`);
         }

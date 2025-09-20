@@ -90,7 +90,7 @@ services:
       - POSTGRES_PWD=temporal
       - POSTGRES_SEEDS=postgresql
       - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/development-sql.yaml
-      - ENABLE_ES=true
+      - ENABLE_ES=false
       - ES_SEEDS=elasticsearch
       - ES_VERSION=v7
       - TEMPORAL_ADDRESS=temporal:7233

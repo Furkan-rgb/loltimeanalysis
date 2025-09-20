@@ -83,6 +83,18 @@ function reducer(state: State, action: Action): State {
         error: action.payload,
         matchHistory: null, // Ensure no old data is shown
       };
+    case "PLAYER_FOUND_NO_HISTORY":
+      // Player validated, no cached history. Clear loading state so Update is enabled.
+      toast(
+        "Player found but no cached history. You can click Update to fetch recent matches.",
+        { description: "No cached data was found for this player." }
+      );
+      return {
+        ...state,
+        status: "success",
+        matchHistory: null,
+        error: null,
+      };
     case "RESET":
       return { ...initialState };
     default:
@@ -172,18 +184,37 @@ function App() {
           // Try to parse the structured JSON response the backend now returns.
           try {
             const errorData = await response.json();
-            const cooldownTime =
-              typeof errorData.cooldown_seconds === "number"
-                ? errorData.cooldown_seconds
-                : // Fallback to old 'detail' parsing for backwards compatibility
-                errorData.detail && errorData.detail.match(/(\d+)/)
-                ? parseInt(errorData.detail.match(/(\d+)/)[1], 10)
-                : 30;
+
+            // FastAPI wraps detail inside { detail: ... } by default when raising HTTPException,
+            // so support both top-level and detail-contained shapes.
+            const detail =
+              errorData &&
+              typeof errorData === "object" &&
+              "detail" in errorData
+                ? errorData.detail
+                : null;
+
+            let cooldownTime = 30;
+            if (typeof errorData.cooldown_seconds === "number") {
+              cooldownTime = errorData.cooldown_seconds;
+            } else if (detail && typeof detail.cooldown_seconds === "number") {
+              cooldownTime = detail.cooldown_seconds;
+            } else if (typeof detail === "string") {
+              const numericMatch = detail.match(/(\d+)/);
+              if (numericMatch) cooldownTime = parseInt(numericMatch[1], 10);
+            }
 
             dispatch({ type: "SET_COOLDOWN", payload: cooldownTime });
 
+            const inProgressFlag =
+              typeof errorData.in_progress === "boolean"
+                ? errorData.in_progress
+                : detail && typeof detail.in_progress === "boolean"
+                ? detail.in_progress
+                : false;
+
             // If backend indicates there's an update in progress, attach to the SSE stream
-            if (errorData.in_progress) {
+            if (inProgressFlag) {
               createAndListenToEventSource(username, tag, region);
             }
             return;
@@ -227,8 +258,14 @@ function App() {
           return;
         }
 
-        // THIS IS THE FIX: Only start the listener after confirming an update is happening.
+        // If the player exists but no cached history is present, the server
+        // returns 204. Move out of the loading state so the Update button
+        // is enabled, and attach to SSE only if an update is already running.
         if (res.status === 204) {
+          dispatch({ type: "PLAYER_FOUND_NO_HISTORY" });
+          // Even though there's no cache, there might be an in-progress update
+          // started by another client; attach to the SSE stream to show progress.
+          toast("No cache — listening for an in-progress update (if any)...");
           createAndListenToEventSource(username, tag, region);
           return;
         }
@@ -302,6 +339,11 @@ function App() {
                 formData={formData}
                 onFormChange={handleFormChange}
                 urlParams={params}
+                canUpdate={
+                  params.region === formData.region &&
+                  params.username === formData.username &&
+                  params.tag === formData.tag
+                }
               />
             </div>
           </div>

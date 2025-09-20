@@ -20,6 +20,7 @@ export type Action =
   | { type: "SET_COOLDOWN"; payload: number }
   | { type: "DECREMENT_COOLDOWN" }
   | { type: "PLAYER_NOT_FOUND"; payload: string }
+  | { type: "PLAYER_FOUND_NO_HISTORY" }
   | { type: "RESET" };
 
 export type PlayerUrlParams = {
@@ -45,6 +46,7 @@ export type PlayerHistoryFormProps = {
   onFormChange: (field: keyof FormData, value: string) => void;
   urlParams: PlayerUrlParams;
   isUpdating: boolean;
+  canUpdate?: boolean;
 };
 
 // This defines the state when the job is running

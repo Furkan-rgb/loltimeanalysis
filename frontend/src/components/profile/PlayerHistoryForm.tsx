@@ -1,4 +1,4 @@
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,18 +24,9 @@ export function PlayerHistoryForm({
   cooldown,
   formData,
   onFormChange,
-  urlParams,
-  isDataLoaded,
   isUpdating,
+  canUpdate,
 }: PlayerHistoryFormProps) {
-  const isNewSearch = useMemo(
-    () =>
-      formData.region !== urlParams.region ||
-      formData.username !== urlParams.username ||
-      formData.tag !== urlParams.tag,
-    [formData, urlParams]
-  );
-
   const [errors, setErrors] = useState({
     region: false,
     username: false,
@@ -61,11 +52,10 @@ export function PlayerHistoryForm({
       });
       return;
     }
-
-    if (isNewSearch || !isDataLoaded) {
-      onSearch(formData);
-    } else {
+    if (canUpdate) {
       onUpdate();
+    } else {
+      onSearch(formData);
     }
   };
 
@@ -85,12 +75,8 @@ export function PlayerHistoryForm({
   const getButtonText = () => {
     if (cooldown > 0) return `Cooldown (${cooldown}s)`;
     if (isLoading) return "Fetching...";
-
-    if (isNewSearch || !isDataLoaded) {
-      return "Fetch History";
-    } else {
-      return "Update";
-    }
+    // If the App indicates we can update the current URL/form, prefer Update
+    return canUpdate ? "Update" : "Fetch History";
   };
 
   return (

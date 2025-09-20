@@ -147,9 +147,13 @@ async def get_history(game_name: str, tag_line: str, region: str, r: redis.Redis
     """
     player_id = key_service.get_player_id(game_name, tag_line, region)
     cache_key = key_service.get_cache_key(player_id)
+    lock_key = key_service.get_lock_key(player_id)
 
     if cached_data := redis_service.get_from_cache(r, cache_key):
-        return {"status": "cached", "data": cached_data}
+        # Also indicate if an update is currently in progress for this player so clients
+        # can automatically attach to the SSE stream and show live progress.
+        in_progress = bool(r.exists(lock_key))
+        return {"status": "cached", "data": cached_data, "in_progress": in_progress}
 
     try:
         async with httpx.AsyncClient() as client:

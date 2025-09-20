@@ -237,6 +237,12 @@ function App() {
           const responseJson = await res.json();
           dispatch({ type: "FETCH_SUCCESS", payload: responseJson });
           toast.success("Match history loaded!");
+
+          // If the server indicates an update is currently running for this player,
+          // automatically attach to the SSE stream to show live progress.
+          if (responseJson.in_progress) {
+            createAndListenToEventSource(username, tag, region);
+          }
         } else {
           throw new Error(`Server responded with status: ${res.status}`);
         }

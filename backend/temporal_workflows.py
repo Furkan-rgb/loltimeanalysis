@@ -4,6 +4,8 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 import key_service
+import redis_service
+import config
 
 @workflow.defn
 class FetchMatchHistoryWorkflow:
@@ -18,6 +20,15 @@ class FetchMatchHistoryWorkflow:
         try:
             player_id = key_service.get_player_id(game_name, tag_line, region)
             cache_key = key_service.get_cache_key(player_id)
+            lock_key = key_service.get_lock_key(player_id)
+            cooldown_key = key_service.get_cooldown_key(player_id)
+
+            # Get a redis client so we can set cooldown and release the lock on completion.
+            redis_client = None
+            try:
+                redis_client = redis_service.get_redis_client()
+            except Exception:
+                redis_client = None
             
             puuid = await workflow.execute_activity(
                 "get_puuid_activity",
@@ -72,6 +83,16 @@ class FetchMatchHistoryWorkflow:
             self._error = str(e)
             self._final_status = "failed"
             return f"Workflow failed: {e}"
+        finally:
+            # Always attempt to set a post-update cooldown and release the in-progress lock.
+            try:
+                if redis_client:
+                    # Set the cooldown (applies after update completes)
+                    redis_service.set_cooldown(redis_client, cooldown_key, config.COOLDOWN_SECONDS)
+                    # Release the in-progress lock so new updates can be started after cooldown
+                    redis_service.release_lock(redis_client, lock_key)
+            except Exception as e:
+                workflow.logger.warning(f"Failed to cleanup redis keys for {player_id}: {e}")
 
     @workflow.query
     def get_status(self) -> dict:

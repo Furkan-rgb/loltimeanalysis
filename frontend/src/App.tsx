@@ -169,12 +169,32 @@ function App() {
     })
       .then(async (response) => {
         if (response.status === 429) {
-          const errorData = await response.json();
-          const detail = errorData.detail || "";
-          const match = detail.match(/(\d+)/);
-          const cooldownTime = match ? parseInt(match[1], 10) : 30;
-          dispatch({ type: "SET_COOLDOWN", payload: cooldownTime });
-          return;
+          // Try to parse the structured JSON response the backend now returns.
+          try {
+            const errorData = await response.json();
+            const cooldownTime =
+              typeof errorData.cooldown_seconds === "number"
+                ? errorData.cooldown_seconds
+                : // Fallback to old 'detail' parsing for backwards compatibility
+                errorData.detail && errorData.detail.match(/(\d+)/)
+                ? parseInt(errorData.detail.match(/(\d+)/)[1], 10)
+                : 30;
+
+            dispatch({ type: "SET_COOLDOWN", payload: cooldownTime });
+
+            // If backend indicates there's an update in progress, attach to the SSE stream
+            if (errorData.in_progress) {
+              createAndListenToEventSource(username, tag, region);
+            }
+            return;
+          } catch (e) {
+            // If parsing fails, fallback to previous brittle parsing
+            const text = await response.text();
+            const match = text.match(/(\d+)/);
+            const cooldownTime = match ? parseInt(match[1], 10) : 30;
+            dispatch({ type: "SET_COOLDOWN", payload: cooldownTime });
+            return;
+          }
         }
         if (!response.ok) throw new Error("Failed to trigger update.");
         createAndListenToEventSource(username, tag, region);

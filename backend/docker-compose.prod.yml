@@ -1,0 +1,10 @@
+services:
+  api:
+    # We remove the volume so the container uses the code copied by the Dockerfile.
+    volumes: []
+    # We remove --reload for production efficiency.
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    # We also ensure the worker doesn't use a volume.
+    volumes: []

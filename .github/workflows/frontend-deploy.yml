@@ -35,4 +35,4 @@ jobs:
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           source: "frontend/dist/"
-          target: "/var/www/yourdomain.com/html"
+          target: "/var/www/loltimeanalysis.com/html"

@@ -1,4 +1,4 @@
-name: Deploy to DigitalOcean
+name: Deploy Backend to DigitalOcean
 
 # This workflow runs on every push to the 'main' branch
 on:

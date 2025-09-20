@@ -1,0 +1,41 @@
+name: Deploy Frontend to DigitalOcean
+
+# Run this workflow on a push to the main branch
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out your repository's code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up the Node.js environment
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20" # Use a specific version of Node.js
+          cache: "npm" # Cache npm dependencies to speed up future builds
+
+      # Step 3: Install your project's dependencies
+      - name: Install Dependencies
+        run: npm install
+
+      # Step 4: Build your Vite + React project
+      - name: Build Project
+        run: npm run build
+
+      # Step 5: Copy the built 'dist' folder to your server
+      - name: Deploy to Server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          source: "dist/" # The folder to copy
+          target: "/var/www/loltimeanalysis.com/html" # The destination on your server

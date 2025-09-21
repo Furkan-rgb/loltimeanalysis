@@ -21,17 +21,34 @@ jobs:
             cd ~/loltimeanalysis/backend
             git pull
 
-            # Set the Build ID using the Git tag name
             export TEMPORAL_WORKER_BUILD_ID=${{ github.ref_name }}
 
-            # Deploy the new worker version
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
-            # Wait a few seconds for the new worker to start and register
-            echo "Waiting for the new worker to become available..."
-            sleep 10
+            # --- Start of new retry logic ---
+            echo "Waiting for Temporal server to become available..."
+            ATTEMPTS=0
+            MAX_ATTEMPTS=6
+            SUCCESS=false
+            until [ $ATTEMPTS -eq $MAX_ATTEMPTS ]
+            do
+              # Use the CLI's own health check command
+              if docker compose exec -T temporal-admin-tools temporal cluster health | grep -q "UP"; then
+                SUCCESS=true
+                break
+              fi
+              ATTEMPTS=$((ATTEMPTS+1))
+              echo "Connection attempt $ATTEMPTS failed. Retrying in 10 seconds..."
+              sleep 10
+            done
 
-            # Promote the new version to be the default for the task queue
+            if [ "$SUCCESS" = "false" ]; then
+              echo "Temporal server did not become healthy in time. Aborting."
+              exit 1
+            fi
+            echo "Temporal server is healthy."
+            # --- End of new retry logic ---
+
             echo "Promoting Build ID ${{ github.ref_name }} to default..."
             docker compose exec -T temporal-admin-tools temporal worker deployment set-current-version \
               --deployment-name "match-history-processor" \

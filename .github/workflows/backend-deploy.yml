@@ -20,5 +20,35 @@ jobs:
           script: |
             cd ~/loltimeanalysis/backend
             git pull
-            export TEMPORAL_WORKER_BUILD_ID=${{ GITHUB.SHA }}
+
+            export TEMPORAL_WORKER_BUILD_ID=${{ github.ref_name }}
+
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+            echo "Waiting for Temporal server to become available..."
+            ATTEMPTS=0
+            MAX_ATTEMPTS=6
+            SUCCESS=false
+            until [ $ATTEMPTS -eq $MAX_ATTEMPTS ]
+            do
+              # Explicitly provide the address in the health check
+              if docker compose exec -T temporal-admin-tools temporal --address temporal:7233 operator cluster health | grep -q "SERVING"; then
+                SUCCESS=true
+                break
+              fi
+              ATTEMPTS=$((ATTEMPTS+1))
+              echo "Connection attempt $ATTEMPTS failed. Retrying in 10 seconds..."
+              sleep 10
+            done
+
+            if [ "$SUCCESS" = "false" ]; then
+              echo "Temporal server did not become healthy in time. Aborting."
+              exit 1
+            fi
+            echo "Temporal server is healthy."
+
+            echo "Promoting Build ID ${{ github.ref_name }} to default..."
+            # Explicitly provide the address in the promotion command
+            docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment set-current-version \
+              --deployment-name "match-history-processor" \
+              --build-id "${{ github.ref_name }}"

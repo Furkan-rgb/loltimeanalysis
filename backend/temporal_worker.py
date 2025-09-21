@@ -81,7 +81,7 @@ async def main():
             deployment_config=WorkerDeploymentConfig(
                 version=WorkerDeploymentVersion(
                     deployment_name="match-history-processor",
-                    build_id=worker_build_id),
+                    build_id=BUILD_ID),
                 use_worker_versioning=True,
                 default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE
             ),

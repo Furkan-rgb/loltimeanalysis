@@ -3,8 +3,8 @@ name: Deploy Backend to DigitalOcean
 # This workflow runs on every push to the 'main' branch
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 jobs:
   deploy:

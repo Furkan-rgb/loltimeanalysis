@@ -3,7 +3,7 @@ name: Deploy Frontend to DigitalOcean
 on:
   push:
     branches:
-      - main
+      - frontend-main
 
 jobs:
   deploy:

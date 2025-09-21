@@ -48,8 +48,6 @@ jobs:
             echo "Worker deployment is registered."
 
             echo "Promoting Build ID ${{ github.ref_name }} to default..."
-            # Use the '--name' flag for your CLI version
-            docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment set-current-version \
+            yes | docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment set-current-version \
               --deployment-name "match-history-processor" \
               --build-id "${{ github.ref_name }}"
-              --y

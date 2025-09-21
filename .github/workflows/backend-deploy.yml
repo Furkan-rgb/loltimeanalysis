@@ -25,15 +25,14 @@ jobs:
 
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
-            # --- New and improved wait logic ---
             echo "Waiting for worker deployment 'match-history-processor' to register..."
             ATTEMPTS=0
-            MAX_ATTEMPTS=12 # Increased attempts for worker startup
+            MAX_ATTEMPTS=12
             SUCCESS=false
             until [ $ATTEMPTS -eq $MAX_ATTEMPTS ]
             do
-              # Try to describe the deployment. This will fail until the worker is registered.
-              if docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment describe --deployment-name "match-history-processor"; then
+              # Use the '--name' flag for your CLI version
+              if docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment describe --name "match-history-processor"; then
                 SUCCESS=true
                 break
               fi
@@ -47,9 +46,9 @@ jobs:
               exit 1
             fi
             echo "Worker deployment is registered."
-            # --- End of new wait logic ---
 
             echo "Promoting Build ID ${{ github.ref_name }} to default..."
+            # Use the '--name' flag for your CLI version
             docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment set-current-version \
-              --deployment-name "match-history-processor" \
+              --name "match-history-processor" \
               --build-id "${{ github.ref_name }}"

@@ -1535,7 +1535,7 @@ const ChampionPerformanceQuadrant: React.FC<
             stroke="var(--muted-foreground)"
             strokeDasharray="3 3"
           />
-          <ReferenceLine
+          {/* <ReferenceLine
             x={avgPlayRate}
             stroke="var(--muted-foreground)"
             strokeDasharray="3 3"
@@ -1547,7 +1547,7 @@ const ChampionPerformanceQuadrant: React.FC<
               fill="var(--muted-foreground)"
               fontSize={12}
             />
-          </ReferenceLine>
+          </ReferenceLine> */}
 
           <Scatter name="Champions" data={quadrantData}>
             {/* Overlap-aware labels for each champion */}
@@ -3014,7 +3014,6 @@ function Dashboard({ data }: DashboardProps) {
 
         <Card className="lg:col-span-2">
           <CardHeader>
-            {/* NEW: Add controls to the card header */}
             <div className="flex justify-between items-start flex-wrap gap-4">
               <div>
                 <CardTitle>Champion Performance Quadrant</CardTitle>
@@ -3043,7 +3042,6 @@ function Dashboard({ data }: DashboardProps) {
             </div>
           </CardHeader>
           <CardContent>
-            {/* Pass the new state down to the component */}
             <ChampionPerformanceQuadrant
               data={filteredData}
               overallWinRate={overallWinRateDecimal}

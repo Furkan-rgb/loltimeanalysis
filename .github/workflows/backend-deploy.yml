@@ -20,5 +20,19 @@ jobs:
           script: |
             cd ~/loltimeanalysis/backend
             git pull
-            export TEMPORAL_WORKER_BUILD_ID=${{ GITHUB.SHA }}
+
+            # Set the Build ID using the Git tag name
+            export TEMPORAL_WORKER_BUILD_ID=${{ github.ref_name }}
+
+            # Deploy the new worker version
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+            # Wait a few seconds for the new worker to start and register
+            echo "Waiting for the new worker to become available..."
+            sleep 10
+
+            # Promote the new version to be the default for the task queue
+            echo "Promoting Build ID ${{ github.ref_name }} to default..."
+            docker compose exec -T temporal-admin-tools temporal worker deployment set-current-version \
+              --deployment-name "match-history-processor" \
+              --build-id "${{ github.ref_name }}"

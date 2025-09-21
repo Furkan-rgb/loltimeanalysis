@@ -52,3 +52,4 @@ jobs:
             docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment set-current-version \
               --deployment-name "match-history-processor" \
               --build-id "${{ github.ref_name }}"
+              --yes

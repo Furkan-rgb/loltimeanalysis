@@ -155,12 +155,14 @@ async def get_history(game_name: str, tag_line: str, region: str, r: redis.Redis
     player_id = key_service.get_player_id(game_name, tag_line, region)
     cache_key = key_service.get_cache_key(player_id)
     lock_key = key_service.get_lock_key(player_id)
+    cooldown_key = key_service.get_cooldown_key(player_id)
+    active_cooldown = redis_service.get_cooldown_ttl(r, cooldown_key)
 
     if cached_data := redis_service.get_from_cache(r, cache_key):
         # Also indicate if an update is currently in progress for this player so clients
         # can automatically attach to the SSE stream and show live progress.
         in_progress = bool(r.exists(lock_key))
-        return {"status": "cached", "data": cached_data, "in_progress": in_progress}
+        return {"status": "cached", "data": cached_data, "in_progress": in_progress, "cooldown": active_cooldown,}
 
     try:
         async with httpx.AsyncClient() as client:
@@ -239,8 +241,16 @@ async def stream_status(game_name: str, tag_line: str, region: str, r: redis.Red
         
         # If it never appeared, the update failed to start.
         if not handle:
-            cache_key = key_service.get_cache_key(player_id)
-            model = CompletedState() if r.exists(cache_key) else FailedState(error="Update process failed to start.")
+            # Check if the lock that was acquired to start the job still exists.
+            lock_key = key_service.get_lock_key(player_id)
+            if r.exists(lock_key):
+                # The lock exists, but the handle doesn't. This implies a serious Temporal issue.
+                error_msg = "Update process is stuck and may have failed to start. Please try again later."
+            else:
+                # The lock is gone, meaning the workflow startup failed and cleanup happened.
+                error_msg = "Update process failed during initialization."
+            
+            model = FailedState(error=error_msg)
             yield f"data: {model.model_dump_json()}\n\n"
             return
 
@@ -271,6 +281,10 @@ async def stream_status(game_name: str, tag_line: str, region: str, r: redis.Red
 
                 if status_model:
                     yield f"data: {status_model.model_dump_json()}\n\n"
+                # If no model was produced this iteration, emit a heartbeat comment
+                # so proxies stay aware of an active stream and don't close it.
+                else:
+                    yield ": heartbeat\n\n"
 
                 # If the workflow reached a terminal state, stop streaming.
                 if 'desc' in locals() and desc.status not in [WorkflowExecutionStatus.RUNNING]:
@@ -283,7 +297,14 @@ async def stream_status(game_name: str, tag_line: str, region: str, r: redis.Red
         finally:
             logging.info(f"Closing stream generator for {player_id}.")
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    headers = {
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "Connection": "keep-alive",
+        # For nginx proxies, disable buffering so events are forwarded immediately
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
 
 
 if __name__ == "__main__":

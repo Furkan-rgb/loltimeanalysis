@@ -13,6 +13,8 @@ from activities import (
     get_match_ids_activity,
     get_match_details_activity,
     save_results_to_cache_activity,
+    extend_lock_activity,
+    release_and_cleanup_activity,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -74,6 +76,8 @@ async def main():
                 get_match_ids_activity,
                 get_match_details_activity,
                 save_results_to_cache_activity,
+                extend_lock_activity,
+                release_and_cleanup_activity,
             ],
             max_concurrent_activities=1,
         )

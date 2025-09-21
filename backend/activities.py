@@ -58,3 +58,55 @@ async def save_results_to_cache_activity(cache_key: str, results: list):
     except Exception as e:
         activity.logger.error(f"Failed to save results to Redis: {e}", exc_info=True)
         raise
+
+
+@activity.defn
+async def extend_lock_activity(lock_key: str, extend_by_seconds: int) -> bool:
+    """
+    Activity to extend the TTL of a Redis key (the lock).
+    This acts as a heartbeat to prevent the lock from expiring during long operations.
+    """
+    redis_client = None
+    try:
+        redis_client = redis_service.get_redis_client()
+        # The EXPIRE command in Redis resets the timeout on a key.
+        # It returns 1 if the timeout was set, and 0 if the key does not exist.
+        # We return this boolean to the workflow, though it's not currently used.
+        was_extended = redis_client.expire(lock_key, extend_by_seconds)
+        if not was_extended:
+            activity.logger.warning(f"Attempted to extend a lock that no longer exists: {lock_key}")
+        return bool(was_extended)
+    except Exception as e:
+        activity.logger.error(f"Failed to extend lock for {lock_key}: {e}")
+        # Re-raise the exception to let Temporal's retry policy handle it.
+        raise
+
+
+@activity.defn
+async def release_and_cleanup_activity(lock_key: str, cooldown_key: str, cooldown_seconds: int):
+    """
+    Atomically releases the lock and sets the post-update cooldown.
+    This is called from the workflow's 'finally' block to ensure cleanup.
+    """
+    redis_client = None
+    try:
+        redis_client = redis_service.get_redis_client()
+        
+        # Using a pipeline ensures that both commands are sent to Redis together,
+        # reducing the chance of a failure between the two operations.
+        pipe = redis_client.pipeline()
+        
+        # 1. Delete the in-progress lock.
+        pipe.delete(lock_key)
+        
+        # 2. Set the cooldown to prevent another immediate update.
+        pipe.setex(cooldown_key, cooldown_seconds, "1")
+        
+        # Execute both commands.
+        pipe.execute()
+        
+        activity.logger.info(f"Released lock '{lock_key}' and set cooldown '{cooldown_key}'.")
+    except Exception as e:
+        activity.logger.error(f"Failed to release lock and set cooldown for {lock_key}: {e}")
+        # Re-raise to allow Temporal to retry this critical cleanup step.
+        raise

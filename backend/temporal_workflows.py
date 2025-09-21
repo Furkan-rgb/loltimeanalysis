@@ -17,19 +17,32 @@ class FetchMatchHistoryWorkflow:
 
     @workflow.run
     async def run(self, game_name: str, tag_line: str, region: str) -> str:
-        try:
-            player_id = key_service.get_player_id(game_name, tag_line, region)
-            cache_key = key_service.get_cache_key(player_id)
-            lock_key = key_service.get_lock_key(player_id)
-            cooldown_key = key_service.get_cooldown_key(player_id)
+        player_id = key_service.get_player_id(game_name, tag_line, region)
+        cache_key = key_service.get_cache_key(player_id)
+        lock_key = key_service.get_lock_key(player_id)
+        cooldown_key = key_service.get_cooldown_key(player_id)
 
-            # Get a redis client so we can set cooldown and release the lock on completion.
-            redis_client = None
-            try:
-                redis_client = redis_service.get_redis_client()
-            except Exception:
-                redis_client = None
-            
+        # --- Heartbeat Logic ---
+        # Extend the lock every 60 seconds. Must be less than the lock timeout.
+        heartbeat_interval_seconds = 60
+        # This should match config.LOCK_TIMEOUT_SECONDS
+        lock_ttl_seconds = config.LOCK_TIMEOUT_SECONDS
+
+        async def lock_heartbeat_task():
+            """Runs in the background, extending the lock TTL."""
+            while True:
+                await workflow.sleep(heartbeat_interval_seconds)
+                workflow.logger.info(f"Heartbeating lock for {player_id}")
+                await workflow.execute_activity(
+                    "extend_lock_activity",
+                    args=[lock_key, lock_ttl_seconds],
+                    start_to_close_timeout=timedelta(seconds=10),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+
+        heartbeat_task = asyncio.create_task(lock_heartbeat_task())
+        
+        try:
             puuid = await workflow.execute_activity(
                 "get_puuid_activity",
                 args=[game_name, tag_line, region],
@@ -67,12 +80,10 @@ class FetchMatchHistoryWorkflow:
                 await workflow.sleep(0)
             
             match_details_results.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+            
             await workflow.execute_activity(
                 "save_results_to_cache_activity",
-                # --- MODIFICATION START ---
-                # Pass the correct cache_key to the activity, not the player_id.
                 args=[cache_key, match_details_results],
-                # --- MODIFICATION END ---
                 start_to_close_timeout=timedelta(seconds=30),
             )
             self._final_status = "completed"
@@ -84,15 +95,16 @@ class FetchMatchHistoryWorkflow:
             self._final_status = "failed"
             return f"Workflow failed: {e}"
         finally:
-            # Always attempt to set a post-update cooldown and release the in-progress lock.
-            try:
-                if redis_client:
-                    # Set the cooldown (applies after update completes)
-                    redis_service.set_cooldown(redis_client, cooldown_key, config.COOLDOWN_SECONDS)
-                    # Release the in-progress lock so new updates can be started after cooldown
-                    redis_service.release_lock(redis_client, lock_key)
-            except Exception as e:
-                workflow.logger.warning(f"Failed to cleanup redis keys for {player_id}: {e}")
+            # Always cancel the heartbeat task
+            heartbeat_task.cancel()
+            
+            # Use a dedicated, reliable activity to release the lock and set the cooldown
+            await workflow.execute_activity(
+                "release_and_cleanup_activity",
+                args=[lock_key, cooldown_key, config.COOLDOWN_SECONDS],
+                start_to_close_timeout=timedelta(seconds=15),
+                retry_policy=RetryPolicy(maximum_attempts=5),
+            )
 
     @workflow.query
     def get_status(self) -> dict:

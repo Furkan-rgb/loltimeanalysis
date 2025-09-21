@@ -25,30 +25,31 @@ jobs:
 
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
-            echo "Waiting for Temporal server to become available..."
+            # --- New and improved wait logic ---
+            echo "Waiting for worker deployment 'match-history-processor' to register..."
             ATTEMPTS=0
-            MAX_ATTEMPTS=6
+            MAX_ATTEMPTS=12 # Increased attempts for worker startup
             SUCCESS=false
             until [ $ATTEMPTS -eq $MAX_ATTEMPTS ]
             do
-              # Explicitly provide the address in the health check
-              if docker compose exec -T temporal-admin-tools temporal --address temporal:7233 operator cluster health | grep -q "SERVING"; then
+              # Try to describe the deployment. This will fail until the worker is registered.
+              if docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment describe --deployment-name "match-history-processor"; then
                 SUCCESS=true
                 break
               fi
               ATTEMPTS=$((ATTEMPTS+1))
-              echo "Connection attempt $ATTEMPTS failed. Retrying in 10 seconds..."
-              sleep 10
+              echo "Deployment not found yet. Attempt $ATTEMPTS/$MAX_ATTEMPTS. Retrying in 5 seconds..."
+              sleep 5
             done
 
             if [ "$SUCCESS" = "false" ]; then
-              echo "Temporal server did not become healthy in time. Aborting."
+              echo "Worker deployment did not register in time. Aborting."
               exit 1
             fi
-            echo "Temporal server is healthy."
+            echo "Worker deployment is registered."
+            # --- End of new wait logic ---
 
             echo "Promoting Build ID ${{ github.ref_name }} to default..."
-            # Explicitly provide the address in the promotion command
             docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment set-current-version \
               --deployment-name "match-history-processor" \
               --build-id "${{ github.ref_name }}"

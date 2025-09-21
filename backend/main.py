@@ -206,16 +206,11 @@ async def trigger_update_job(game_name: str, tag_line: str, region: str, r: redi
             FetchMatchHistoryWorkflow.run,
             args=[game_name, tag_line, region],
             id=player_id,
-            task_queue="match-history-task-queue",
+            task_queue=config.TEMPORAL_TASK_QUEUE
         )
         return {"status": "started"}
     except WorkflowAlreadyStartedError:
-        # The workflow was already started by another concurrent request. Release our lock
-        # to avoid leaving it set and return in_progress so clients can attach to SSE.
-        try:
-            redis_service.release_lock(r, lock_key)
-        except Exception:
-            pass
+        # The workflow was already started by another concurrent request.
         return {"status": "in_progress"}
     except Exception as e:
         # If workflow fails to start, release the lock so subsequent attempts can proceed.

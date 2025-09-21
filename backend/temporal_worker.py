@@ -44,7 +44,7 @@ async def main():
         logging.error(f"FATAL: Worker could not connect to Redis: {e}")
         return # Exit if Redis isn't available
 
-    for attempt in range(10):
+    for attempt in range(5):
         try:
             client = await Client.connect(f"{config.TEMPORAL_HOST}:7233")
             logging.info("Successfully connected to Temporal server.")
@@ -65,19 +65,25 @@ async def main():
     heartbeat_task = asyncio.create_task(periodic_heartbeat(redis_for_heartbeat))
 
     try:
-        worker = Worker(
+        # 1. Define the two sets of activities
+        api_activities = [
+            get_puuid_activity,
+            get_match_ids_activity,
+            get_match_details_activity,
+        ]
+        internal_activities = [
+            save_results_to_cache_activity,
+            extend_lock_activity,
+            release_and_cleanup_activity,
+        ]
+
+        # 2. Create the worker for the default, rate-limited queue
+        api_worker = Worker(
             client,
             task_queue=config.TEMPORAL_TASK_QUEUE,
-            workflows=[FetchMatchHistoryWorkflow],
-            activities=[
-                get_puuid_activity,
-                get_match_ids_activity,
-                get_match_details_activity,
-                save_results_to_cache_activity,
-                extend_lock_activity,
-                release_and_cleanup_activity,
-            ],
+            activities=api_activities,
             max_concurrent_activities=1,
+            workflows=[FetchMatchHistoryWorkflow],
             deployment_config=WorkerDeploymentConfig(
                 version=WorkerDeploymentVersion(
                     deployment_name="match-history-processor",
@@ -86,8 +92,27 @@ async def main():
                 default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE
             ),
         )
-        logging.info("Temporal worker started, listening for tasks...")
-        await worker.run()
+
+        # 3. Create the worker for the high-priority, internal queue
+        internal_worker = Worker(
+            client,
+            task_queue=config.INTERNAL_TASK_QUEUE,
+            activities=internal_activities,
+            max_concurrent_activities=5,
+            workflows=[FetchMatchHistoryWorkflow],
+            deployment_config=WorkerDeploymentConfig(
+                version=WorkerDeploymentVersion(
+                    deployment_name="internal-processor",
+                    build_id=BUILD_ID),
+                use_worker_versioning=True,
+                default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE
+            ),
+        )
+
+        # 4. Run both workers concurrently
+        logging.info("Starting both API and Internal workers...")
+        await asyncio.gather(api_worker.run(), internal_worker.run())
+
     finally:
         heartbeat_task.cancel()
         if client:

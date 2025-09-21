@@ -21,11 +21,11 @@ class FetchMatchHistoryWorkflow:
         cache_key = key_service.get_cache_key(player_id)
         lock_key = key_service.get_lock_key(player_id)
         cooldown_key = key_service.get_cooldown_key(player_id)
+        INTERNAL_TASK_QUEUE = config.INTERNAL_TASK_QUEUE
 
         # --- Heartbeat Logic ---
         # Extend the lock every 60 seconds. Must be less than the lock timeout.
         heartbeat_interval_seconds = 60
-        # This should match config.LOCK_TIMEOUT_SECONDS
         lock_ttl_seconds = config.LOCK_TIMEOUT_SECONDS
 
         async def lock_heartbeat_task():
@@ -38,7 +38,7 @@ class FetchMatchHistoryWorkflow:
                     args=[lock_key, lock_ttl_seconds],
                     start_to_close_timeout=timedelta(seconds=10),
                     retry_policy=RetryPolicy(maximum_attempts=3),
-                    priority=Priority(priority_key=1)
+                    task_queue=INTERNAL_TASK_QUEUE,
                 )
 
         heartbeat_task = asyncio.create_task(lock_heartbeat_task())
@@ -49,7 +49,6 @@ class FetchMatchHistoryWorkflow:
                 args=[game_name, tag_line, region],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
-                priority=Priority(priority_key=10)
             )
             
             match_ids = await workflow.execute_activity(
@@ -58,7 +57,6 @@ class FetchMatchHistoryWorkflow:
                 start_to_close_timeout=timedelta(minutes=10),
                 heartbeat_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
-                priority=Priority(priority_key=10)
             )
 
             if not match_ids:
@@ -74,7 +72,6 @@ class FetchMatchHistoryWorkflow:
                     args=[match_id, puuid, region],
                     start_to_close_timeout=timedelta(minutes=5),
                     retry_policy=RetryPolicy(maximum_attempts=3),
-                    priority=Priority(priority_key=10)
                 )
                 fetch_tasks.append(task)
             
@@ -93,7 +90,7 @@ class FetchMatchHistoryWorkflow:
                 args=[cache_key, match_details_results],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
-                priority=Priority(priority_key=5)
+                task_queue=INTERNAL_TASK_QUEUE,
             )
             self._final_status = "completed"
             return f"Successfully processed {len(match_details_results)} matches."
@@ -113,7 +110,7 @@ class FetchMatchHistoryWorkflow:
                 args=[lock_key, cooldown_key, config.COOLDOWN_SECONDS],
                 start_to_close_timeout=timedelta(seconds=15),
                 retry_policy=RetryPolicy(maximum_attempts=5),
-                priority=Priority(priority_key=1)
+                task_queue=INTERNAL_TASK_QUEUE,
             )
 
     @workflow.query

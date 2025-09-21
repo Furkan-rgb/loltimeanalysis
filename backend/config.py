@@ -25,3 +25,4 @@ LOCK_TIMEOUT_SECONDS = 300  # 5 minutes
 
 # --- TEMPORAL TASK QUEUE ---
 TEMPORAL_TASK_QUEUE = "match-history-task-queue"
+INTERNAL_TASK_QUEUE = "internal-tasks"

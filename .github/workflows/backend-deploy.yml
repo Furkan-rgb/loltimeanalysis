@@ -10,7 +10,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      # This action simplifies running commands on a remote server over SSH
       - name: SSH and Deploy
         uses: appleboy/ssh-action@master
         with:
@@ -18,36 +17,46 @@ jobs:
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
+            # Exit immediately if a command exits with a non-zero status.
+            set -e
+
+            # --- Define a reusable function to wait for a deployment ---
+            wait_for_deployment() {
+              local deployment_name="$1"
+              echo "--> Waiting for worker deployment '$deployment_name' to register..."
+              
+              for i in {1..12}; do
+                if docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment describe --name "$deployment_name" &> /dev/null; then
+                  echo "--> Deployment '$deployment_name' found."
+                  return 0
+                fi
+                echo "Deployment not found yet. Attempt $i/12. Retrying in 5 seconds..."
+                sleep 5
+              done
+
+              echo "!!> Worker deployment '$deployment_name' did not register in time. Aborting."
+              exit 1
+            }
+
+            # --- Main Deployment Logic ---
             cd ~/loltimeanalysis/backend
             git pull
 
             export TEMPORAL_WORKER_BUILD_ID=${{ github.ref_name }}
 
+            echo "--> Building and starting services with Build ID: $TEMPORAL_WORKER_BUILD_ID"
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
-            echo "Waiting for worker deployment 'match-history-processor' to register..."
-            ATTEMPTS=0
-            MAX_ATTEMPTS=12
-            SUCCESS=false
-            until [ $ATTEMPTS -eq $MAX_ATTEMPTS ]
-            do
-              # Use the '--name' flag for your CLI version
-              if docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment describe --name "match-history-processor"; then
-                SUCCESS=true
-                break
-              fi
-              ATTEMPTS=$((ATTEMPTS+1))
-              echo "Deployment not found yet. Attempt $ATTEMPTS/$MAX_ATTEMPTS. Retrying in 5 seconds..."
-              sleep 5
-            done
+            wait_for_deployment "match-history-processor"
+            wait_for_deployment "internal-processor"
 
-            if [ "$SUCCESS" = "false" ]; then
-              echo "Worker deployment did not register in time. Aborting."
-              exit 1
-            fi
-            echo "Worker deployment is registered."
-
-            echo "Promoting Build ID ${{ github.ref_name }} to default..."
-            yes | docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment set-current-version \
+            echo "--> Promoting Build ID to default for both deployments..."
+            yes | docker compose exec -T temporal-admin-tools temporal worker deployment set-current-version \
               --deployment-name "match-history-processor" \
-              --build-id "${{ github.ref_name }}"
+              --build-id "$TEMPORAL_WORKER_BUILD_ID"
+
+            yes | docker compose exec -T temporal-admin-tools temporal worker deployment set-current-version \
+              --deployment-name "internal-processor" \
+              --build-id "$TEMPORAL_WORKER_BUILD_ID"
+
+            echo "✅ Deployment successful for Build ID: $TEMPORAL_WORKER_BUILD_ID"

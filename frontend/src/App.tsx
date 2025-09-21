@@ -62,7 +62,7 @@ function App() {
           ) : (
             <div className="container mx-auto p-8">
               <div className="mx-auto max-w-2xl">
-                <div className="flex flex-col items-center justify-center gap-4 rounded-lg border border-dashed border-gray-200 bg-white/50 p-8 text-center shadow-sm">
+                <div className="flex flex-col items-center justify-center gap-4 rounded-lg border bg-card p-8 text-center shadow-sm">
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
                     className="h-12 w-12 text-gray-400"

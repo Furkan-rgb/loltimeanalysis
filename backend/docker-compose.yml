@@ -41,6 +41,7 @@ services:
       - TEMPORAL_HOST=temporal
       - REDIS_HOST=redis
       - TEMPORAL_TASK_QUEUE=match-history-task-queue
+      - TEMPORAL_WORKER_BUILD_ID=${TEMPORAL_WORKER_BUILD_ID:-local-dev}
     depends_on:
       temporal:
         condition: service_healthy

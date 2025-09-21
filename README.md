@@ -1,158 +1,136 @@
 # LoL Time Analysis
 
-A web application to fetch and analyze League of Legends ranked match history using the Riot Games API.
+LoL Time Analysis is a small web application / service that fetches and analyzes League of Legends ranked match history using the Riot Games API. The project is split into a TypeScript + React frontend and a Python backend that provides an API, background workers, and Temporal workflows to coordinate long-running fetching and processing.
 
-## Features
+This README has been updated to reflect the current tech stack and how to run the project in development and with Docker.
 
-- 🎮 Fetch ranked match history for any LoL player
-- 📊 Real-time progress tracking with live updates
-- 🌙 Automatic light/dark mode based on system preference
-- ⚡ Redis caching for fast data retrieval
-- 🔄 Background job processing with rate limiting
-- 📱 Responsive web interface
+## Highlights
 
-## Tech Stack
+- Fetch and analyze ranked match history for LoL players
+- Frontend built with React + Vite + TypeScript
+- Backend built with FastAPI, Temporal for workflows, and Redis for caching/coordination
+- Docker Compose setup for local development
 
-### Backend
-- **FastAPI** - Modern, fast web framework for APIs
-- **Redis** - In-memory data store for caching and job queuing
-- **ARQ** - Async job queue for background tasks
-- **httpx** - Async HTTP client for Riot API calls
+## Tech stack
 
-### Frontend
-- **Vanilla JavaScript** - No frameworks, pure JS
-- **HTML5 & CSS3** - Modern web standards
-- **Responsive Design** - Works on all devices
+Backend
 
-## Project Structure
+- Python 3.11+
+- FastAPI (API server)
+- temporalio (Temporal SDK) for workflows
+- Redis (cache / coordination)
+- httpx (async HTTP client)
+- uvicorn (ASGI server)
+- python-dotenv for env config
+
+Frontend
+
+- React 19 + TypeScript
+- Vite (dev server / build)
+- TailwindCSS for styling
+- Recharts for charts, Radix UI primitives, and other small UI libs
+
+Dev tooling
+
+- Docker / Docker Compose to run Redis, Temporal, and other infrastructure
+
+Project layout
 
 ```
 LoLTimeAnalysis/
-├── backend/
-│   ├── main.py              # FastAPI application
-│   ├── worker.py            # Background job worker
-│   ├── redis_service.py     # Redis operations
-│   ├── riot_api_client.py   # Riot API integration
-│   ├── config.py            # Configuration settings
-│   └── requirements.txt     # Python dependencies
-├── frontend/
-│   └── index.html          # Web interface
-├── docker-compose.yml      # Docker services
+├── backend/                 # FastAPI app, Temporal workflows, workers
+├── frontend/                # React + Vite + TypeScript SPA
+├── docs/                    # Architecture and diagrams
+├── docker-compose.yml       # Development compose configuration
+├── LICENSE
 └── README.md
 ```
 
-## Quick Start
+Quick start (development)
 
-### Prerequisites
+Prerequisites
+
+- Docker & Docker Compose
 - Python 3.11+
-- Redis server
-- Riot Games API key
+- Node 18+ / npm or pnpm
 
-### Installation
+Run everything with Docker Compose (recommended)
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/Furkan-rgb/loltimeanalysis.git
-   cd loltimeanalysis
-   ```
+1. Copy or create a `.env` file at the project root with your Riot API key and any other required vars (see `backend/config.py` for variable names).
 
-2. **Set up Python environment**
-   ```bash
-   python -m venv .venv
-   .venv\Scripts\activate  # Windows
-   # or
-   source .venv/bin/activate  # Linux/Mac
-   ```
+2. Start core services (Redis, Temporal, etc.) and the backend in one command:
 
-3. **Install dependencies**
-   ```bash
-   pip install -r backend/requirements.txt
-   ```
-
-4. **Configure environment**
-   - Get your API key from [Riot Developer Portal](https://developer.riotgames.com/)
-   - Update `backend/config.py` with your API key
-
-5. **Start Redis** (using Docker)
-   ```bash
-   docker-compose up redis -d
-   ```
-
-6. **Run the application**
-   
-   Terminal 1 - Start the API server:
-   ```bash
-   cd backend
-   python main.py
-   ```
-   
-   Terminal 2 - Start the worker:
-   ```bash
-   cd backend
-   python worker.py
-   ```
-
-7. **Open the web interface**
-   - Open `frontend/index.html` in your browser
-   - Or serve it with a local web server
-
-## Usage
-
-1. Enter a League of Legends **Game Name** and **Tag Line** (e.g., "Faker" + "KR1")
-2. Click **"Fetch History"** to get recent ranked matches
-3. View real-time progress as data is fetched from Riot API
-4. Analyze match history in the results table
-5. Click **"Update"** to refresh data (respects rate limits)
-
-## API Endpoints
-
-- `POST /fetch-history/` - Start fetching match history
-- `GET /fetch-status/` - Check fetch job status
-
-## Configuration
-
-Key settings in `backend/config.py`:
-- `RIOT_API_KEY` - Your Riot Games API key
-- `GAMES_TO_FETCH` - Number of recent games to fetch
-- `CACHE_EXPIRATION_SECONDS` - How long to cache results
-- `COOLDOWN_SECONDS` - Rate limiting between requests
-
-## Development
-
-### Running with auto-reload
-
-```bash
-# API server with auto-reload
-cd backend
-python main.py
-
-# Worker with file watching
-cd backend
-python worker.py --watch
+```powershell
+docker compose -f .\backend\docker-compose.yml up -d --build
 ```
 
-### Docker Development
+This project contains Docker Compose config under `backend/` which defines Redis and Temporal services used by the backend.
 
-```bash
-# Start all services
-docker-compose up -d
+Run the backend locally (without Docker)
 
-# View logs
-docker-compose logs -f
+1. Create and activate a virtual environment:
+
+```powershell
+python -m venv .venv; .venv\Scripts\Activate
 ```
 
-## Contributing
+2. Install Python dependencies:
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+```powershell
+pip install -r backend/requirements.txt
+```
 
-## License
+3. Start the API server:
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+```powershell
+cd backend; uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
 
-## Disclaimer
+4. Start any worker/temporal worker processes as needed (see `backend/temporal_worker.py` and `backend/temporal_workflows.py`).
 
-This project isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
+Run the frontend
+
+1. Install Node deps and start dev server:
+
+```powershell
+cd frontend; npm install; npm run dev
+```
+
+2. Open the URL shown by Vite (usually http://localhost:5173)
+
+Configuration
+
+- The backend loads configuration from environment variables and `backend/config.py`. Common variables:
+  - RIOT_API_KEY - Riot Games API key
+  - REDIS_URL - Redis connection URL
+  - TEMPORAL_ADDRESS - Temporal service address (when using Docker Compose)
+
+API surface (examples)
+
+- POST /api/fetch-history - start fetching a player's ranked history (body: player identifiers)
+- GET /api/fetch-status?job_id=... - query the status/progress of a fetch job
+
+Note: exact routes may be prefixed with `/api` depending on the backend server configuration. Check `backend/main.py` for the current router paths.
+
+Development notes and tips
+
+- The backend uses Temporal workflows to manage long-running fetches and retries. If you run Temporal via Docker Compose, start a Temporal worker locally to pick up workflows.
+- Redis is used for caching and quick job state; you can inspect it with `redis-cli`.
+- The frontend is TypeScript + React; change components under `frontend/src/components` and hooks under `frontend/src/hooks`.
+
+Contribution
+
+Contributions are welcome. Suggested flow:
+
+1. Fork the repo
+2. Create a feature branch
+3. Add tests or manual verification steps
+4. Open a Pull Request and describe how to run/test the change
+
+License
+
+This project is licensed under the MIT License. See the `LICENSE` file for details.
+
+Acknowledgements
+
+This project is not affiliated with or endorsed by Riot Games. Use the Riot API according to its terms of service.

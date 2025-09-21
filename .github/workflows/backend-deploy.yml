@@ -20,4 +20,5 @@ jobs:
           script: |
             cd ~/loltimeanalysis/backend
             git pull
+            export TEMPORAL_WORKER_BUILD_ID=${{ GITHUB.SHA }}
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build

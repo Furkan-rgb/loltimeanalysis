@@ -1,7 +1,7 @@
 import asyncio
 from datetime import timedelta
 from temporalio import workflow
-from temporalio.common import RetryPolicy
+from temporalio.common import RetryPolicy, Priority
 
 import key_service
 import redis_service
@@ -38,6 +38,7 @@ class FetchMatchHistoryWorkflow:
                     args=[lock_key, lock_ttl_seconds],
                     start_to_close_timeout=timedelta(seconds=10),
                     retry_policy=RetryPolicy(maximum_attempts=3),
+                    priority=Priority(priority_key=1)
                 )
 
         heartbeat_task = asyncio.create_task(lock_heartbeat_task())
@@ -47,6 +48,8 @@ class FetchMatchHistoryWorkflow:
                 "get_puuid_activity",
                 args=[game_name, tag_line, region],
                 start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+                priority=Priority(priority_key=10)
             )
             
             match_ids = await workflow.execute_activity(
@@ -54,6 +57,8 @@ class FetchMatchHistoryWorkflow:
                 args=[puuid, region],
                 start_to_close_timeout=timedelta(minutes=10),
                 heartbeat_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+                priority=Priority(priority_key=10)
             )
 
             if not match_ids:
@@ -68,6 +73,8 @@ class FetchMatchHistoryWorkflow:
                     "get_match_details_activity",
                     args=[match_id, puuid, region],
                     start_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                    priority=Priority(priority_key=10)
                 )
                 fetch_tasks.append(task)
             
@@ -85,6 +92,8 @@ class FetchMatchHistoryWorkflow:
                 "save_results_to_cache_activity",
                 args=[cache_key, match_details_results],
                 start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+                priority=Priority(priority_key=5)
             )
             self._final_status = "completed"
             return f"Successfully processed {len(match_details_results)} matches."
@@ -104,6 +113,7 @@ class FetchMatchHistoryWorkflow:
                 args=[lock_key, cooldown_key, config.COOLDOWN_SECONDS],
                 start_to_close_timeout=timedelta(seconds=15),
                 retry_policy=RetryPolicy(maximum_attempts=5),
+                priority=Priority(priority_key=1)
             )
 
     @workflow.query

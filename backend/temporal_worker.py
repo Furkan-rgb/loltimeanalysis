@@ -1,9 +1,10 @@
-# temporal_worker.py (Revised and Resilient Version)
+import os
 import asyncio
 import logging
 import time
 from temporalio.client import Client
-from temporalio.worker import Worker
+from temporalio.worker import Worker, WorkerDeploymentConfig
+from temporalio.common import WorkerDeploymentVersion, VersioningBehavior
 
 import config
 import redis_service
@@ -19,7 +20,7 @@ from activities import (
 
 logging.basicConfig(level=logging.INFO)
 
-# --- NEW: Health Heartbeat ---
+BUILD_ID = os.getenv("TEMPORAL_WORKER_BUILD_ID", f"dev-{time.time()}")
 HEARTBEAT_KEY = f"worker:heartbeat:{config.TEMPORAL_TASK_QUEUE}"
 
 async def periodic_heartbeat(redis_client: redis_service.redis.Redis, interval_seconds: int = 30):
@@ -36,7 +37,6 @@ async def main():
     client = None
     last_exception = None
     
-    # --- MODIFICATION: Connect to Redis first for the heartbeat ---
     try:
         redis_for_heartbeat = redis_service.get_redis_client()
         logging.info("Successfully connected to Redis for worker heartbeat.")
@@ -62,13 +62,11 @@ async def main():
         logging.error("Could not connect to Temporal server after multiple retries.")
         raise last_exception
 
-    # --- MODIFICATION: Start heartbeat task ---
     heartbeat_task = asyncio.create_task(periodic_heartbeat(redis_for_heartbeat))
 
     try:
         worker = Worker(
             client,
-            # --- MODIFICATION: Use task queue from config ---
             task_queue=config.TEMPORAL_TASK_QUEUE,
             workflows=[FetchMatchHistoryWorkflow],
             activities=[
@@ -80,11 +78,17 @@ async def main():
                 release_and_cleanup_activity,
             ],
             max_concurrent_activities=1,
+            deployment_config=WorkerDeploymentConfig(
+                version=WorkerDeploymentVersion(
+                    deployment_name="match-history-processor",
+                    build_id=worker_build_id),
+                use_worker_versioning=True,
+                default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE
+            ),
         )
         logging.info("Temporal worker started, listening for tasks...")
         await worker.run()
     finally:
-        # --- MODIFICATION: Graceful shutdown ---
         heartbeat_task.cancel()
         if client:
             await client.disconnect()

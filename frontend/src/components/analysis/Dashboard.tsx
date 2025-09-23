@@ -75,6 +75,7 @@ import {
 } from "@/components/ui/popover";
 import { Slider } from "../ui/slider";
 import { Label } from "../ui/label";
+import { Toggle } from "@/components/ui/toggle";
 import "katex/dist/katex.min.css";
 import { InlineMath } from "react-katex";
 
@@ -477,9 +478,9 @@ const YearlyWinrateHeatmap: React.FC<{
           ))}
         </div>
 
-        <div className="flex-1" ref={gridRef}>
+        <div className="flex-1 overflow-x-auto" ref={gridRef}>
           {/* Month labels row */}
-          <div className="flex text-xs text-muted-foreground mb-1">
+          <div className="inline-flex text-xs text-muted-foreground mb-1">
             {weeks.map((_, colIdx) => {
               const m = monthLabels.find((ml) => ml.col === colIdx);
               return (
@@ -498,7 +499,7 @@ const YearlyWinrateHeatmap: React.FC<{
           </div>
 
           {/* Grid */}
-          <div className="flex">
+          <div className="inline-flex">
             {weeks.map((week, colIdx) => (
               <div
                 key={colIdx}
@@ -2431,6 +2432,8 @@ function Dashboard({ data }: DashboardProps) {
   const [minClusterGames, setMinClusterGames] = useState(2);
   const [wrInfluence, setWrInfluence] = useState(1);
   const [minQuadrantGames, setMinQuadrantGames] = useState(5);
+  // Toggle to switch between Time-of-Day blocks (default) and Hourly detailed view
+  const [showHourlyView, setShowHourlyView] = useState(false);
 
   const championOptions = useMemo(
     () => [
@@ -2737,37 +2740,66 @@ function Dashboard({ data }: DashboardProps) {
 
         <Card className="lg:col-span-4">
           <CardHeader>
-            <CardTitle>Hourly Performance Breakdown</CardTitle>
-            <CardDescription>
-              A detailed heatmap of win rates by day and hour, adjusted for
-              confidence.
-            </CardDescription>
+            <div className="flex items-center justify-between w-full gap-4">
+              <div>
+                <CardTitle>Time of Day Performance</CardTitle>
+                <CardDescription>
+                  Win rates grouped by time blocks across the week, adjusted for
+                  confidence. Toggle to view hourly breakdown.
+                </CardDescription>
+              </div>
+              <div className="ml-auto">
+                {/* Toggle: controlled, no adjacent text labels. Render a moving knob based on state */}
+                <Toggle
+                  aria-label="Toggle hourly view"
+                  pressed={showHourlyView}
+                  onPressedChange={(v: boolean) => setShowHourlyView(v)}
+                  className="h-8 px-3 rounded-full flex items-center cursor-pointer hover:shadow-sm"
+                >
+                  <span className="text-sm">Detailed View</span>
+                </Toggle>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
-            <HourlyWinRateHeatmap
-              data={filteredData}
-              overallWinRate={overallWinRateDecimal}
-              smoothingMethod={smoothingMethod as SmoothingMethods}
-              kValue={kValue}
-            />
-          </CardContent>
-        </Card>
+            {/* Reduced fixed-height container to reduce whitespace; align content top so smaller views don't stretch */}
+            <div
+              className="w-full transition-all duration-300"
+              style={{ minHeight: 320 }}
+            >
+              <div className="w-full h-full relative">
+                {/* Both views are stacked and animated: active view fades/slides in */}
+                <div
+                  className={`absolute inset-0 transition-all duration-300 ease-out transform ${
+                    showHourlyView
+                      ? "opacity-100 translate-y-0 z-20"
+                      : "opacity-0 -translate-y-3 z-10 pointer-events-none"
+                  }`}
+                >
+                  <HourlyWinRateHeatmap
+                    data={filteredData}
+                    overallWinRate={overallWinRateDecimal}
+                    smoothingMethod={smoothingMethod as SmoothingMethods}
+                    kValue={kValue}
+                  />
+                </div>
 
-        <Card className="lg:col-span-4">
-          <CardHeader>
-            <CardTitle>Time of Day Performance</CardTitle>
-            <CardDescription>
-              Win rates grouped by time blocks across the week, adjusted for
-              confidence.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <TimeOfDayHeatmap
-              data={filteredData}
-              overallWinRate={overallWinRateDecimal}
-              smoothingMethod={smoothingMethod as SmoothingMethods}
-              kValue={kValue}
-            />
+                <div
+                  className={`absolute inset-0 transition-all duration-300 ease-out transform ${
+                    showHourlyView
+                      ? "opacity-0 -translate-y-3 z-10 pointer-events-none"
+                      : "opacity-100 translate-y-0 z-20"
+                  }`}
+                >
+                  <TimeOfDayHeatmap
+                    data={filteredData}
+                    overallWinRate={overallWinRateDecimal}
+                    smoothingMethod={smoothingMethod as SmoothingMethods}
+                    kValue={kValue}
+                  />
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
 

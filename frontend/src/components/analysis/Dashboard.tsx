@@ -276,14 +276,23 @@ const WinLossRoleDistributionChart: React.FC<{ data: MatchHistoryData }> = ({
           onMouseEnter={handleMouseEnter} // MODIFIED: Added handler
           onMouseLeave={handleMouseLeave} // MODIFIED: Added handler
         >
-          {winLossData.map((d, i) => (
-            <Cell
-              key={`winloss-${i}`}
-              fill={getColor(d.name)}
-              // MODIFIED: Added conditional opacity
-              fillOpacity={highlighted && d.name !== highlighted ? 0.3 : 1}
-            />
-          ))}
+          {winLossData.map((d, i) => {
+            // Force explicit inner pie colors: blue for wins, red for losses
+            const forcedFill =
+              d.name === "wins"
+                ? "#3273FF"
+                : d.name === "losses"
+                ? "#FF4B4B"
+                : getColor(d.name);
+            return (
+              <Cell
+                key={`winloss-${i}`}
+                fill={forcedFill}
+                // Preserve conditional opacity when highlighting
+                fillOpacity={highlighted && d.name !== highlighted ? 0.3 : 1}
+              />
+            );
+          })}
           <RechartsLabel
             content={({ viewBox }: { viewBox?: any }) => {
               if (viewBox && "cx" in viewBox && "cy" in viewBox) {

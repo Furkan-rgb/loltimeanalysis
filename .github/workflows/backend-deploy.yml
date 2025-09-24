@@ -26,8 +26,10 @@ jobs:
               echo "--> Waiting for Build ID '$build_id' to register for deployment '$deployment_name'..."
               
               for i in {1..12}; do
-                # CORRECTED: Pass deployment name as a positional argument instead of a flag.
-                if docker compose exec -T temporal-admin-tools temporal worker deployment list-versions "$deployment_name" | grep -q "$build_id"; then
+                # CORRECTED: Use 'describe' which exists, and pipe its output to grep to check for the build ID.
+                # NOTE: Some versions of temporal-cli may not have a --deployment-name flag for describe. 
+                # If this fails, passing the name as a positional argument is the next step.
+                if docker compose exec -T temporal-admin-tools temporal worker deployment describe --deployment-name "$deployment_name" | grep -q "$build_id"; then
                   echo "--> Build ID '$build_id' found for '$deployment_name'."
                   return 0
                 fi

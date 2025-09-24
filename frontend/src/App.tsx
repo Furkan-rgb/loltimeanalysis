@@ -48,9 +48,9 @@ function App() {
                 onFormChange={handleFormChange}
                 urlParams={params}
                 canUpdate={
-                  params.region === formData.region &&
-                  params.username === formData.username &&
-                  params.tag === formData.tag
+                  (params.region ?? "") === formData.region &&
+                  (params.username ?? "") === formData.username &&
+                  (params.tag ?? "") === formData.tag
                 }
               />
             </div>

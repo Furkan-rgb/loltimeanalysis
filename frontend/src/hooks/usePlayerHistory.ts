@@ -104,7 +104,19 @@ function reducer(state: State, action: Action): State {
 export function usePlayerHistory() {
   const params = useParams();
   const navigate = useNavigate();
-  const [state, dispatch] = useReducer(reducer, initialState);
+  // Seed initial state from URL params so the form shows the region/username/tag
+  // immediately on mount instead of starting empty and being reset.
+  const [state, dispatch] = useReducer(reducer, params, (p) => {
+    const { region, username, tag } = (p as any) || {};
+    return {
+      ...initialState,
+      formData: {
+        region: region ?? "",
+        username: username ?? "",
+        tag: tag ?? "",
+      },
+    };
+  });
 
   const activeEventSourceRef = useRef<EventSource | null>(null);
   const API_BASE_URL =
@@ -223,48 +235,71 @@ export function usePlayerHistory() {
 
   useEffect(() => {
     const { region, username, tag } = params as any;
-    if (!region || !username || !tag) {
-      dispatch({ type: "RESET" });
-      return;
-    }
 
-    dispatch({ type: "SEARCH", payload: { region, username, tag } });
+    // If no params at all, do nothing and keep the seeded/initial state.
+    if (!region && !username && !tag) return;
 
-    fetch(`${API_BASE_URL}/history/${username}/${tag}/${region}`)
-      .then(async (res) => {
-        if (res.status === 404) {
-          const errorDetail = (await res.json()).detail;
-          dispatch({ type: "PLAYER_NOT_FOUND", payload: errorDetail });
-          return;
-        }
+    // If we have all three params, perform the SEARCH + fetch flow.
+    if (region && username && tag) {
+      dispatch({ type: "SEARCH", payload: { region, username, tag } });
 
-        if (res.status === 204) {
-          dispatch({ type: "PLAYER_FOUND_NO_HISTORY" });
-          createAndListenToEventSource(username, tag, region);
-          return;
-        }
-
-        if (res.ok) {
-          const responseJson = await res.json();
-          dispatch({ type: "FETCH_SUCCESS", payload: responseJson });
-          toast.success("Match history loaded!");
-
-          if (responseJson.cooldown && responseJson.cooldown > 0) {
-            dispatch({ type: "SET_COOLDOWN", payload: responseJson.cooldown });
+      fetch(`${API_BASE_URL}/history/${username}/${tag}/${region}`)
+        .then(async (res) => {
+          if (res.status === 404) {
+            const errorDetail = (await res.json()).detail;
+            dispatch({ type: "PLAYER_NOT_FOUND", payload: errorDetail });
+            return;
           }
 
-          if (responseJson.in_progress) {
+          if (res.status === 204) {
+            dispatch({ type: "PLAYER_FOUND_NO_HISTORY" });
             createAndListenToEventSource(username, tag, region);
+            return;
           }
-        } else {
-          throw new Error(`Server responded with status: ${res.status}`);
-        }
-      })
-      .catch((err) => {
-        if (err.name !== "SyntaxError") {
-          dispatch({ type: "STREAM_FAILURE", payload: err.message });
-        }
-      });
+
+          if (res.ok) {
+            const responseJson = await res.json();
+            dispatch({ type: "FETCH_SUCCESS", payload: responseJson });
+            toast.success("Match history loaded!");
+
+            if (responseJson.cooldown && responseJson.cooldown > 0) {
+              dispatch({
+                type: "SET_COOLDOWN",
+                payload: responseJson.cooldown,
+              });
+            }
+
+            if (responseJson.in_progress) {
+              createAndListenToEventSource(username, tag, region);
+            }
+          } else {
+            throw new Error(`Server responded with status: ${res.status}`);
+          }
+        })
+        .catch((err) => {
+          if (err.name !== "SyntaxError") {
+            dispatch({ type: "STREAM_FAILURE", payload: err.message });
+          }
+        });
+    } else {
+      // Partial params: seed/update form fields individually so the select
+      // and inputs show values without triggering a search/reset.
+      if (region)
+        dispatch({
+          type: "FORM_CHANGE",
+          payload: { field: "region", value: region },
+        });
+      if (username)
+        dispatch({
+          type: "FORM_CHANGE",
+          payload: { field: "username", value: username },
+        });
+      if (tag)
+        dispatch({
+          type: "FORM_CHANGE",
+          payload: { field: "tag", value: tag },
+        });
+    }
 
     return () => {
       if (activeEventSourceRef.current) {

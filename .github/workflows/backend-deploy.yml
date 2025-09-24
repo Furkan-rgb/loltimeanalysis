@@ -26,8 +26,8 @@ jobs:
               echo "--> Waiting for Build ID '$build_id' to register for deployment '$deployment_name'..."
               
               for i in {1..12}; do
-                # Check the list of versions for the specific build ID. This is more reliable.
-                if docker compose exec -T temporal-admin-tools temporal worker deployment list-versions --deployment-name "$deployment_name" | grep -q "$build_id"; then
+                # CORRECTED: Pass deployment name as a positional argument instead of a flag.
+                if docker compose exec -T temporal-admin-tools temporal worker deployment list-versions "$deployment_name" | grep -q "$build_id"; then
                   echo "--> Build ID '$build_id' found for '$deployment_name'."
                   return 0
                 fi

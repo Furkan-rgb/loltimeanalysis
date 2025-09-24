@@ -12,6 +12,7 @@ from temporal_workflows import FetchMatchHistoryWorkflow
 from activities import (
     get_puuid_activity,
     get_match_ids_activity,
+    filter_cached_matches_activity,
     get_match_details_activity,
     save_results_to_cache_activity,
     extend_lock_activity,
@@ -69,6 +70,7 @@ async def main():
         api_activities = [
             get_puuid_activity,
             get_match_ids_activity,
+            filter_cached_matches_activity,
             get_match_details_activity,
         ]
         internal_activities = [

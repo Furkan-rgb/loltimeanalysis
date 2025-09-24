@@ -61,6 +61,40 @@ async def save_results_to_cache_activity(cache_key: str, results: list):
 
 
 @activity.defn
+async def filter_cached_matches_activity(cache_key: str, candidate_match_ids: list[str]) -> dict:
+    """
+    Returns a dict containing cached match objects for IDs present in cache and
+    a list of missing match IDs that need to be fetched.
+
+    Response shape: {"existing": [match_obj,...], "missing_ids": [id,...]}
+    """
+    redis_client = None
+    try:
+        redis_client = redis_service.get_redis_client()
+        cached_ids = redis_service.get_cached_match_ids(redis_client, cache_key) or set()
+
+        # Find which IDs are missing
+        missing = [mid for mid in candidate_match_ids if mid not in cached_ids]
+
+        # Load full cached objects for existing ids (if any)
+        existing_objs = []
+        if cached_ids:
+            cached_list = redis_service.get_from_cache(redis_client, cache_key) or []
+            # Build a map for quick lookup
+            id_map = {item.get("match_id"): item for item in cached_list if isinstance(item, dict) and item.get("match_id")}
+            for mid in candidate_match_ids:
+                if mid in id_map:
+                    existing_objs.append(id_map[mid])
+
+        return {"existing": existing_objs, "missing_ids": missing}
+
+    except Exception as e:
+        activity.log.error(f"Error filtering cached matches for key {cache_key}: {e}", exc_info=True)
+        # Re-raise so Temporal retry policy can handle transient problems
+        raise
+
+
+@activity.defn
 async def extend_lock_activity(lock_key: str, extend_by_seconds: int) -> bool:
     """
     Activity to extend the TTL of a Redis key (the lock).

@@ -52,11 +52,24 @@ class FetchMatchHistoryWorkflow:
             if not match_ids:
                 self._final_status = "no_matches"
                 return "Completed: No matches found."
-
             self._total = len(match_ids)
-            
+
+            # Filter cached matches so we only fetch details for missing IDs
+            filter_result = await workflow.execute_activity(
+                "filter_cached_matches_activity",
+                args=[key_service.get_cache_key(player_id), match_ids],
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            existing_matches = filter_result.get("existing", []) or []
+            missing_ids = filter_result.get("missing_ids", []) or []
+
+            # Count cached items as already processed for progress reporting
+            self._processed = len(existing_matches)
+
             fetch_tasks = []
-            for match_id in match_ids:
+            for match_id in missing_ids:
                 task = workflow.execute_activity(
                     "get_match_details_activity",
                     args=[match_id, puuid, region],
@@ -93,11 +106,22 @@ class FetchMatchHistoryWorkflow:
                 # Yield control to the workflow runtime to keep things cooperative.
                 await workflow.sleep(0)
             
-            match_details_results.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
-            
+            # Merge cached and newly fetched results. Deduplicate on match_id.
+            combined = []
+            seen = set()
+            # Add newly fetched first (they're more likely to be fresh), then cached ones
+            for item in (match_details_results + existing_matches):
+                mid = item.get("match_id") if isinstance(item, dict) else None
+                if not mid or mid in seen:
+                    continue
+                seen.add(mid)
+                combined.append(item)
+
+            combined.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+
             await workflow.execute_activity(
                 "save_results_to_cache_activity",
-                args=[cache_key, match_details_results],
+                args=[cache_key, combined],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
                 task_queue=INTERNAL_TASK_QUEUE,

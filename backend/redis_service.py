@@ -41,6 +41,45 @@ def get_from_cache(redis_client, key: str) -> list | dict | None:
         print(f"Redis/JSON error for key {key}: {e}")
         return None
 
+
+def get_cached_match_ids(redis_client, key: str) -> set | None:
+    """
+    Efficiently returns a set of match_id strings currently cached at the given key.
+    Returns None on error or if key doesn't exist.
+    """
+    if not redis_client:
+        return None
+    try:
+        # If the cache key is a zset as used for match lists, iterate members and
+        # extract match_id from the JSON. Using zrange/zrevrange returns list of
+        # JSON strings which we can parse.
+        key_type = redis_client.type(key)
+        if key_type == "zset":
+            members = redis_client.zrevrange(key, 0, -1, withscores=False)
+            ids = set()
+            for m in members:
+                try:
+                    obj = json.loads(m)
+                    if isinstance(obj, dict) and obj.get("match_id"):
+                        ids.add(obj.get("match_id"))
+                except json.JSONDecodeError:
+                    # Skip malformed member but continue processing others
+                    continue
+            return ids if ids else None
+        elif key_type == "string":
+            cached_string = redis_client.get(key)
+            if not cached_string:
+                return None
+            data = json.loads(cached_string)
+            if isinstance(data, list):
+                return {item.get("match_id") for item in data if isinstance(item, dict) and item.get("match_id")}
+            return None
+        else:
+            return None
+    except (redis.exceptions.RedisError, json.JSONDecodeError) as e:
+        print(f"Redis error while getting cached match ids for key {key}: {e}")
+        return None
+
 def set_in_cache(redis_client, key: str, data: list | dict):
     if not redis_client or not data: return
     try:

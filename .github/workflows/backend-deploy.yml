@@ -19,21 +19,23 @@ jobs:
             # Exit immediately if a command exits with a non-zero status.
             set -e
 
-            # --- Define a reusable function to wait for a deployment ---
-            wait_for_deployment() {
+            # --- Define a reusable function to wait for a specific build ID to register ---
+            wait_for_build_id() {
               local deployment_name="$1"
-              echo "--> Waiting for worker deployment '$deployment_name' to register..."
+              local build_id="$2"
+              echo "--> Waiting for Build ID '$build_id' to register for deployment '$deployment_name'..."
               
               for i in {1..12}; do
-                if docker compose exec -T temporal-admin-tools temporal --address temporal:7233 worker deployment describe --name "$deployment_name" &> /dev/null; then
-                  echo "--> Deployment '$deployment_name' found."
+                # Check the list of versions for the specific build ID. This is more reliable.
+                if docker compose exec -T temporal-admin-tools temporal worker deployment list-versions --deployment-name "$deployment_name" | grep -q "$build_id"; then
+                  echo "--> Build ID '$build_id' found for '$deployment_name'."
                   return 0
                 fi
-                echo "Deployment not found yet. Attempt $i/12. Retrying in 5 seconds..."
+                echo "Build ID not found yet. Attempt $i/12. Retrying in 5 seconds..."
                 sleep 5
               done
 
-              echo "!!> Worker deployment '$deployment_name' did not register in time. Aborting."
+              echo "!!> Build ID '$build_id' did not register for '$deployment_name' in time. Aborting."
               exit 1
             }
 
@@ -46,8 +48,9 @@ jobs:
             echo "--> Building and starting services with Build ID: $TEMPORAL_WORKER_BUILD_ID"
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
-            wait_for_deployment "match-history-processor"
-            wait_for_deployment "internal-processor"
+            # Wait for the specific build ID to appear for each deployment
+            wait_for_build_id "match-history-processor" "$TEMPORAL_WORKER_BUILD_ID"
+            wait_for_build_id "internal-processor" "$TEMPORAL_WORKER_BUILD_ID"
 
             echo "--> Promoting Build ID to default for both deployments..."
             yes | docker compose exec -T temporal-admin-tools temporal worker deployment set-current-version \

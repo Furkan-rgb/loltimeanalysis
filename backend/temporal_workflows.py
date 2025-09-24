@@ -24,24 +24,14 @@ class FetchMatchHistoryWorkflow:
         INTERNAL_TASK_QUEUE = config.INTERNAL_TASK_QUEUE
 
         # --- Heartbeat Logic ---
-        # Extend the lock every 60 seconds. Must be less than the lock timeout.
+        # We'll extend the lock periodically from the main workflow logic
+        # rather than spawning a background asyncio task. Spawning raw
+        # asyncio tasks inside a Temporal workflow breaks determinism
+        # and can cause replay issues. Use the workflow clock instead.
         heartbeat_interval_seconds = 60
         lock_ttl_seconds = config.LOCK_TIMEOUT_SECONDS
-
-        async def lock_heartbeat_task():
-            """Runs in the background, extending the lock TTL."""
-            while True:
-                await workflow.sleep(heartbeat_interval_seconds)
-                workflow.logger.info(f"Heartbeating lock for {player_id}")
-                await workflow.execute_activity(
-                    "extend_lock_activity",
-                    args=[lock_key, lock_ttl_seconds],
-                    start_to_close_timeout=timedelta(seconds=10),
-                    retry_policy=RetryPolicy(maximum_attempts=3),
-                    task_queue=INTERNAL_TASK_QUEUE,
-                )
-
-        heartbeat_task = asyncio.create_task(lock_heartbeat_task())
+        # Track when we last extended the lock using the workflow clock.
+        last_heartbeat_time = workflow.now()
         
         try:
             puuid = await workflow.execute_activity(
@@ -80,7 +70,27 @@ class FetchMatchHistoryWorkflow:
                 result = await future
                 if result is not None:
                     match_details_results.append(result)
+
+                # Update processed count for the query hook.
                 self._processed += 1
+
+                # Periodically extend the external Redis lock so it doesn't
+                # expire while we're still processing. Use the workflow
+                # clock to decide when to extend.
+                now = workflow.now()
+                elapsed = (now - last_heartbeat_time).total_seconds()
+                if elapsed >= heartbeat_interval_seconds:
+                    workflow.logger.info(f"Extending lock for {player_id} after {int(elapsed)}s")
+                    await workflow.execute_activity(
+                        "extend_lock_activity",
+                        args=[lock_key, lock_ttl_seconds],
+                        start_to_close_timeout=timedelta(seconds=10),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                        task_queue=INTERNAL_TASK_QUEUE,
+                    )
+                    last_heartbeat_time = workflow.now()
+
+                # Yield control to the workflow runtime to keep things cooperative.
                 await workflow.sleep(0)
             
             match_details_results.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
@@ -101,8 +111,8 @@ class FetchMatchHistoryWorkflow:
             self._final_status = "failed"
             return f"Workflow failed: {e}"
         finally:
-            # Always cancel the heartbeat task
-            heartbeat_task.cancel()
+            # No background heartbeat task to cancel; lock cleanup is handled
+            # via the dedicated activity in the finally block below.
             
             # Use a dedicated, reliable activity to release the lock and set the cooldown
             await workflow.execute_activity(

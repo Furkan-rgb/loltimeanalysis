@@ -52,6 +52,7 @@ import {
   ChartLegend,
   ChartLegendContent,
 } from "@/components/ui/chart";
+import WeekDayWinrate from "./WeekDayWinrate";
 import {
   Select,
   SelectContent,
@@ -2826,6 +2827,18 @@ function Dashboard({ data }: DashboardProps) {
               smoothingMethod={smoothingMethod as SmoothingMethods}
               kValue={kValue}
             />
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-4">
+          <CardHeader>
+            <CardTitle>Win Rate by Hour (per Weekday)</CardTitle>
+            <CardDescription>
+              Per-hour win rate mini-sparklines for each day of the week.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <WeekDayWinrate data={filteredData} />
           </CardContent>
         </Card>
 

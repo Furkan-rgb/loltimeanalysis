@@ -30,7 +30,11 @@ echo ""
 # Loop through each deployment and promote the specified build ID.
 for deployment in "${DEPLOYMENTS[@]}"; do
   echo "--> Promoting '$deployment' to Build ID '$BUILD_ID'..."
-  docker compose exec -T "$ADMIN_TOOLS_SERVICE" temporal worker deployment set-current-version \
+  # Use compose file path relative to this script by default. Allow override with COMPOSE_FILE env var.
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  COMPOSE_FILE="${COMPOSE_FILE:-$SCRIPT_DIR/docker-compose.yml}"
+
+  docker compose -f "$COMPOSE_FILE" exec -T "$ADMIN_TOOLS_SERVICE" temporal worker deployment set-current-version \
     --deployment-name "$deployment" \
     --build-id "$BUILD_ID"
   echo "    Done."
